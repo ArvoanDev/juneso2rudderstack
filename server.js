@@ -18,7 +18,6 @@ const datasetId = process.env.BIGQUERY_DATASET_ID;
 
 const camelToSnakeCase = (str) => str.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
 
-// A more robust function to sanitize event names into valid table names.
 const sanitizeTableName = (name) => {
     if (!name) return 'unknown_event';
     const snakeCased = name
@@ -57,7 +56,8 @@ function inferBigQueryType(value) {
 
 // --- Core BigQuery Logic ---
 
-async function manageSchemaAndInsert(tableId, baseSchema, rows, dynamicPropertyKey) {
+async function manageSchemaAndInsert(tableId, baseSchema, rows, dynamicPropertyKey, processedTablesSet) {
+    processedTablesSet.add(tableId); // Track that this table has been processed
     if (rows.length === 0) return;
     let table = bigquery.dataset(datasetId).table(tableId);
 
@@ -72,7 +72,6 @@ async function manageSchemaAndInsert(tableId, baseSchema, rows, dynamicPropertyK
             group_id: row.group_id,
         };
 
-        // **THE FIX**: Only add 'event' and 'event_text' for track-related tables.
         if (baseSchema === TRACKS_SCHEMA) {
             finalRow.event = sanitizeTableName(row.name);
             finalRow.event_text = row.name;
@@ -152,25 +151,25 @@ function parseCsvToRows(file) {
     });
 }
 
-async function processIdentifiesFile(file) {
+async function processIdentifiesFile(file, processedTablesSet) {
     const rows = await parseCsvToRows(file);
-    await manageSchemaAndInsert('identifies', IDENTIFIES_SCHEMA, rows, 'traits');
-    await manageSchemaAndInsert('users', USERS_SCHEMA, rows, 'traits');
+    await manageSchemaAndInsert('identifies', IDENTIFIES_SCHEMA, rows, 'traits', processedTablesSet);
+    await manageSchemaAndInsert('users', USERS_SCHEMA, rows, 'traits', processedTablesSet);
 }
 
-async function processGroupsFile(file) {
+async function processGroupsFile(file, processedTablesSet) {
     const rows = await parseCsvToRows(file);
-    await manageSchemaAndInsert('_groups', GROUPS_SCHEMA, rows, 'traits');
+    await manageSchemaAndInsert('_groups', GROUPS_SCHEMA, rows, 'traits', processedTablesSet);
 }
 
-async function processEventsFile(file) {
+async function processEventsFile(file, processedTablesSet) {
     const allEvents = await parseCsvToRows(file);
     const pageRows = allEvents.filter(row => row.type === '0');
     const trackRows = allEvents.filter(row => row.type === '2');
 
     // Process main tables
-    await manageSchemaAndInsert('pages', PAGES_SCHEMA, pageRows, 'properties');
-    await manageSchemaAndInsert('tracks', TRACKS_SCHEMA, trackRows, 'properties');
+    await manageSchemaAndInsert('pages', PAGES_SCHEMA, pageRows, 'properties', processedTablesSet);
+    await manageSchemaAndInsert('tracks', TRACKS_SCHEMA, trackRows, 'properties', processedTablesSet);
 
     // Process track-specific tables
     const tracksByName = trackRows.reduce((acc, event) => {
@@ -181,8 +180,57 @@ async function processEventsFile(file) {
     }, {});
 
     for (const [tableId, rows] of Object.entries(tracksByName)) {
-        await manageSchemaAndInsert(tableId, TRACKS_SCHEMA, rows, 'properties');
+        await manageSchemaAndInsert(tableId, TRACKS_SCHEMA, rows, 'properties', processedTablesSet);
     }
+}
+
+// --- SQL Query Generation ---
+
+function generateSqlQueries(tableNames) {
+    const projectId = process.env.BIGQUERY_PROJECT_ID;
+    const migrationDataset = process.env.BIGQUERY_DATASET_ID;
+    const liveDataset = 'your_live_rudderstack_dataset'; // Placeholder
+    const viewsDataset = 'analytics_views'; // Placeholder
+
+    const viewQueries = [];
+    const mergeQueries = [];
+
+    const viewHeader = `-- =====================================================================================
+-- Non-Destructive VIEW Queries (Recommended)
+-- These create a virtual layer for analysis without moving or duplicating data.
+-- Run these queries in a new dataset (e.g., '${viewsDataset}').
+-- =====================================================================================`;
+
+    const mergeHeader = `-- =====================================================================================
+-- Destructive MERGE (Upsert) Queries
+-- These physically copy data from the migration dataset to your live dataset.
+-- Use with caution. Back up your live tables before running.
+-- =====================================================================================`;
+
+    for (const table of tableNames) {
+        const viewSql = `-- For table: ${table}\n` +
+        `CREATE OR REPLACE VIEW \`${projectId}.${viewsDataset}.${table}\` AS\n` +
+        `SELECT * FROM \`${projectId}.${liveDataset}.${table}\`\n` +
+        `UNION ALL\n` +
+        `SELECT * FROM \`${projectId}.${migrationDataset}.${table}\`;`;
+        viewQueries.push({ table, query: viewSql });
+
+        const mergeSql = `-- For table: ${table}\n` +
+        `MERGE \`${projectId}.${liveDataset}.${table}\` T\n` +
+        `USING \`${projectId}.${migrationDataset}.${table}\` S\n` +
+        `ON T.id = S.id\n` +
+        `WHEN NOT MATCHED BY TARGET THEN\n` +
+        `  INSERT ROW;`;
+        mergeQueries.push({ table, query: mergeSql });
+    }
+
+    return {
+        message: `Upload successful! Here are the SQL queries to merge your migrated data. Replace 'your_live_rudderstack_dataset' with the name of your actual production dataset.`,
+        viewHeader,
+        mergeHeader,
+        viewQueries,
+        mergeQueries
+    };
 }
 
 // --- Express Routes ---
@@ -190,27 +238,28 @@ app.post('/upload', upload.fields([
     { name: 'identifies', maxCount: 1 }, { name: 'groups', maxCount: 1 }, { name: 'events', maxCount: 1 },
 ]), async (req, res) => {
     if (!req.files) return res.status(400).send('No files were uploaded.');
+    
+    const processedTables = new Set();
+
     try {
         console.log("\n--- Starting New Upload Process ---");
 
         if (req.files.identifies) {
             console.log("\n[Main] Processing identifies file...");
-            await processIdentifiesFile(req.files.identifies[0]);
-            console.log("[Main] Finished processing identifies file.");
+            await processIdentifiesFile(req.files.identifies[0], processedTables);
         }
         if (req.files.groups) {
             console.log("\n[Main] Processing groups file...");
-            await processGroupsFile(req.files.groups[0]);
-            console.log("[Main] Finished processing groups file.");
+            await processGroupsFile(req.files.groups[0], processedTables);
         }
         if (req.files.events) {
             console.log("\n[Main] Processing events file...");
-            await processEventsFile(req.files.events[0]);
-            console.log("[Main] Finished processing events file.");
+            await processEventsFile(req.files.events[0], processedTables);
         }
 
         console.log("\n--- Upload Process Completed Successfully ---\n");
-        res.status(200).send('Files processed and uploaded to BigQuery successfully!');
+        const sqlQueries = generateSqlQueries(processedTables);
+        res.status(200).json(sqlQueries);
     } catch (error) {
         console.error("\n--- An error occurred during the upload process ---");
         console.error("Final error caught in handler:", error.message);
@@ -220,4 +269,3 @@ app.post('/upload', upload.fields([
 
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 app.listen(port, () => console.log(`Server running at http://localhost:${port}`));
-// --- End of server.js ---
