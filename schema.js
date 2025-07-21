@@ -13,24 +13,6 @@ const BASE_SCHEMA = [
     { name: 'channel', type: 'STRING' },
     { name: 'loaded_at', type: 'TIMESTAMP' },
     { name: 'uuid_ts', type: 'TIMESTAMP' },
-    // Standard flattened context fields
-    { name: 'context_app_name', type: 'STRING' },
-    { name: 'context_app_namespace', type: 'STRING' },
-    { name: 'context_app_version', type: 'STRING' },
-    { name: 'context_ip', type: 'STRING' },
-    { name: 'context_library_name', type: 'STRING' },
-    { name: 'context_library_version', type: 'STRING' },
-    { name: 'context_locale', type: 'STRING' },
-    { name: 'context_page_path', type: 'STRING' },
-    { name: 'context_page_referrer', type: 'STRING' },
-    { name: 'context_page_search', type: 'STRING' },
-    { name: 'context_page_title', type: 'STRING' },
-    { name: 'context_page_url', type: 'STRING' },
-    { name: 'context_screen_density', type: 'FLOAT64' },
-    { name: 'context_screen_height', type: 'INT64' },
-    { name: 'context_screen_width', type: 'INT64' },
-    { name: 'context_timezone', type: 'STRING' },
-    { name: 'context_user_agent', type: 'STRING' },
 ];
 
 // Specific schemas only add fields that are not part of traits or properties

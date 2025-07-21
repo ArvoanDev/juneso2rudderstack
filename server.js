@@ -17,18 +17,32 @@ const datasetId = process.env.BIGQUERY_DATASET_ID;
 // --- Helper Functions ---
 
 const camelToSnakeCase = (str) => str.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
-const sanitizeTableName = (name) => name ? camelToSnakeCase(name).replace(/[^a-zA-Z0-9_]/g, '_') : 'unknown_event';
+
+// A more robust function to sanitize event names into valid table names.
+const sanitizeTableName = (name) => {
+    if (!name) return 'unknown_event';
+    const snakeCased = name
+        .replace(/([A-Z])/g, '_$1')
+        .replace(/[\s\-]+/g, '_')
+        .replace(/[^a-zA-Z0-9_]/g, '');
+    const cleaned = snakeCased
+        .replace(/__+/g, '_')
+        .toLowerCase()
+        .replace(/^_|_$/g, '');
+    return cleaned || 'unknown_event';
+};
+
 
 function flattenObject(obj, prefix = '') {
     const result = {};
     if (!obj || typeof obj !== 'object') return result;
     for (let [key, value] of Object.entries(obj)) {
-        key = camelToSnakeCase(key); // Convert key to snake_case
+        key = camelToSnakeCase(key);
         const newKey = prefix ? `${prefix}_${key}` : key;
         if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
             Object.assign(result, flattenObject(value, newKey));
         } else {
-            result[newKey] = value;
+            result[newKey] = Array.isArray(value) ? JSON.stringify(value) : value;
         }
     }
     return result;
@@ -45,62 +59,86 @@ function inferBigQueryType(value) {
 
 async function manageSchemaAndInsert(tableId, baseSchema, rows, dynamicPropertyKey) {
     if (rows.length === 0) return;
-    const table = bigquery.dataset(datasetId).table(tableId);
+    let table = bigquery.dataset(datasetId).table(tableId);
+
+    const flattenedRows = rows.map(row => {
+        const dynamicData = JSON.parse(row[dynamicPropertyKey] || '{}');
+        const context = JSON.parse(row.context || '{}');
+        
+        const finalRow = {
+            id: row.message_id, anonymous_id: row.anonymous_id, user_id: row.user_id,
+            received_at: row.received_at, sent_at: row.sent_at, timestamp: row.timestamp,
+            original_timestamp: row.original_timestamp, channel: row.channel, version: row.version,
+            group_id: row.group_id,
+        };
+
+        // **THE FIX**: Only add 'event' and 'event_text' for track-related tables.
+        if (baseSchema === TRACKS_SCHEMA) {
+            finalRow.event = sanitizeTableName(row.name);
+            finalRow.event_text = row.name;
+        }
+
+        Object.assign(finalRow, flattenObject(context, 'context'));
+        Object.assign(finalRow, flattenObject(dynamicData));
+
+        Object.keys(finalRow).forEach(key => finalRow[key] === undefined && delete finalRow[key]);
+        return finalRow;
+    });
 
     const discoveredFields = new Map();
-    rows.forEach(row => {
-        const dynamicData = JSON.parse(row[dynamicPropertyKey] || '{}');
-        const flattenedDynamic = flattenObject(dynamicData);
-        for (const [key, value] of Object.entries(flattenedDynamic)) {
+    flattenedRows.forEach(row => {
+        for (const [key, value] of Object.entries(row)) {
             const type = inferBigQueryType(value);
             if (!discoveredFields.has(key) || (discoveredFields.get(key) !== 'STRING' && type === 'STRING')) {
                discoveredFields.set(key, type);
             }
         }
     });
-
-    const newSchemaFields = Array.from(discoveredFields, ([name, type]) => ({ name, type }));
-    const finalSchema = [...baseSchema, ...newSchemaFields];
+    
+    baseSchema.forEach(field => discoveredFields.set(field.name, field.type));
+    
+    const finalSchema = Array.from(discoveredFields, ([name, type]) => ({ name, type }));
 
     const [exists] = await table.exists();
     if (!exists) {
-        console.log(`Table ${tableId} not found. Creating...`);
-        await bigquery.dataset(datasetId).createTable(tableId, { schema: finalSchema });
+        console.log(`[${tableId}] Table not found. Creating with complete schema...`);
+        const [createdTable] = await bigquery.dataset(datasetId).createTable(tableId, { schema: finalSchema });
+        console.log(`[${tableId}] createTable operation completed.`);
+        table = createdTable;
     } else {
         const [metadata] = await table.getMetadata();
         const existingFields = new Set(metadata.schema.fields.map(f => f.name));
         const fieldsToAdd = finalSchema.filter(field => !existingFields.has(field.name));
         if (fieldsToAdd.length > 0) {
-            console.log(`Evolving schema for table ${tableId}, adding: ${fieldsToAdd.map(f => f.name).join(', ')}`);
+            console.log(`[${tableId}] Evolving schema, adding: ${fieldsToAdd.map(f=>f.name).join(', ')}`);
             metadata.schema.fields.push(...fieldsToAdd);
             await table.setMetadata(metadata);
         }
     }
-
-    const flattenedRows = rows.map(row => {
-        const dynamicData = JSON.parse(row[dynamicPropertyKey] || '{}');
-        const context = JSON.parse(row.context || '{}');
-        
-        return {
-            id: row.message_id,
-            anonymous_id: row.anonymous_id,
-            user_id: row.user_id,
-            received_at: row.received_at,
-            sent_at: row.sent_at,
-            timestamp: row.timestamp,
-            original_timestamp: row.original_timestamp,
-            channel: row.channel,
-            version: row.version,
-            event: row.name,
-            event_text: row.name,
-            group_id: row.group_id,
-            ...flattenObject(context, 'context'),
-            ...flattenObject(dynamicData),
-        };
-    });
     
-    await table.insert(flattenedRows);
-    console.log(`Inserted ${rows.length} rows into ${tableId}`);
+    let attempts = 0;
+    const maxAttempts = 5;
+    const delay = 2000;
+
+    while (attempts < maxAttempts) {
+        try {
+            console.log(`[${tableId}] Attempting to insert ${flattenedRows.length} rows (Attempt ${attempts + 1})...`);
+            await table.insert(flattenedRows);
+            console.log(`[${tableId}] Successfully inserted ${flattenedRows.length} rows.`);
+            return;
+        } catch (err) {
+            if (err.code === 404 && attempts < maxAttempts - 1) {
+                attempts++;
+                console.warn(`[${tableId}] Insert failed because table was not found. Retrying in ${delay * attempts / 1000}s...`);
+                await new Promise(resolve => setTimeout(resolve, delay * attempts));
+            } else {
+                console.error(`\n--- BigQuery Insert Error in table: ${tableId} ---`);
+                console.error("Full error object:", JSON.stringify(err, null, 2));
+                console.error("--- End of Error Details ---\n");
+                throw err;
+            }
+        }
+    }
 }
 
 // --- File Processors ---
@@ -130,17 +168,19 @@ async function processEventsFile(file) {
     const pageRows = allEvents.filter(row => row.type === '0');
     const trackRows = allEvents.filter(row => row.type === '2');
 
+    // Process main tables
     await manageSchemaAndInsert('pages', PAGES_SCHEMA, pageRows, 'properties');
     await manageSchemaAndInsert('tracks', TRACKS_SCHEMA, trackRows, 'properties');
 
-    const eventsByName = trackRows.reduce((acc, event) => {
+    // Process track-specific tables
+    const tracksByName = trackRows.reduce((acc, event) => {
         const tableName = sanitizeTableName(event.name);
         if (!acc[tableName]) acc[tableName] = [];
         acc[tableName].push(event);
         return acc;
     }, {});
 
-    for (const [tableId, rows] of Object.entries(eventsByName)) {
+    for (const [tableId, rows] of Object.entries(tracksByName)) {
         await manageSchemaAndInsert(tableId, TRACKS_SCHEMA, rows, 'properties');
     }
 }
@@ -151,17 +191,33 @@ app.post('/upload', upload.fields([
 ]), async (req, res) => {
     if (!req.files) return res.status(400).send('No files were uploaded.');
     try {
-        const promises = [];
-        if (req.files.identifies) promises.push(processIdentifiesFile(req.files.identifies[0]));
-        if (req.files.groups) promises.push(processGroupsFile(req.files.groups[0]));
-        if (req.files.events) promises.push(processEventsFile(req.files.events[0]));
-        await Promise.all(promises);
+        console.log("\n--- Starting New Upload Process ---");
+
+        if (req.files.identifies) {
+            console.log("\n[Main] Processing identifies file...");
+            await processIdentifiesFile(req.files.identifies[0]);
+            console.log("[Main] Finished processing identifies file.");
+        }
+        if (req.files.groups) {
+            console.log("\n[Main] Processing groups file...");
+            await processGroupsFile(req.files.groups[0]);
+            console.log("[Main] Finished processing groups file.");
+        }
+        if (req.files.events) {
+            console.log("\n[Main] Processing events file...");
+            await processEventsFile(req.files.events[0]);
+            console.log("[Main] Finished processing events file.");
+        }
+
+        console.log("\n--- Upload Process Completed Successfully ---\n");
         res.status(200).send('Files processed and uploaded to BigQuery successfully!');
     } catch (error) {
-        console.error('BIGQUERY_ERROR:', error.errors || error);
-        res.status(500).send(`An error occurred: ${error.message}`);
+        console.error("\n--- An error occurred during the upload process ---");
+        console.error("Final error caught in handler:", error.message);
+        res.status(500).send(`An error occurred. Check the server console for detailed logs.`);
     }
 });
 
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 app.listen(port, () => console.log(`Server running at http://localhost:${port}`));
+// --- End of server.js ---
