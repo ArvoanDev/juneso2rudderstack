@@ -2,29 +2,42 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>BigQuery Uploader</title>
+    <title>June.so to BigQuery Uploader</title>
     <style>
         body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; padding: 2rem; }
-        form { display: flex; flex-direction: column; gap: 1rem; border: 1px solid #ccc; padding: 2rem; border-radius: 8px; }
+        form { display: flex; flex-direction: column; gap: 1rem; border: 1px solid #ccc; padding: 2rem; border-radius: 8px; width: 100%; max-width: 500px; }
+        .file-input-group { display: flex; flex-direction: column; gap: 0.25rem; }
         button { font-size: 1.1rem; padding: 10px 20px; cursor: pointer; }
-        #status-message { margin-top: 1rem; font-weight: bold; padding: 1rem; border-radius: 5px; }
+        button:disabled { cursor: not-allowed; background-color: #ccc; }
+        #status-message { margin-top: 1rem; font-weight: bold; padding: 1rem; border-radius: 5px; width: 100%; max-width: 500px; box-sizing: border-box; text-align: center;}
         .success { background-color: #d4edda; color: #155724; }
         .error { background-color: #f8d7da; color: #721c24; }
+        .info { background-color: #cce5ff; color: #004085; }
+        .file-error-message { color: #721c24; font-size: 0.9rem; font-weight: bold; min-height: 1.2em; }
     </style>
 </head>
 <body>
-    <h1>Upload Data to BigQuery</h1>
+    <h1>Upload June.so Data to BigQuery</h1>
     <form id="upload-form">
-        <label for="identifies">Identifies CSV:</label>
-        <input type="file" id="identifies" name="identifies" accept=".csv" required>
+        <div class="file-input-group">
+            <label for="identifies">Identifies CSV:</label>
+            <input type="file" id="identifies" name="identifies" accept=".csv" required>
+            <small id="identifies-error" class="file-error-message"></small>
+        </div>
 
-        <label for="groups">Groups CSV:</label>
-        <input type="file" id="groups" name="groups" accept=".csv" required>
+        <div class="file-input-group">
+            <label for="groups">Groups CSV:</label>
+            <input type="file" id="groups" name="groups" accept=".csv" required>
+            <small id="groups-error" class="file-error-message"></small>
+        </div>
 
-        <label for="events">Events CSV:</label>
-        <input type="file" id="events" name="events" accept=".csv" required>
+        <div class="file-input-group">
+            <label for="events">Events CSV:</label>
+            <input type="file" id="events" name="events" accept=".csv" required>
+            <small id="events-error" class="file-error-message"></small>
+        </div>
 
-        <button type="submit">🚀 Upload to BigQuery</button>
+        <button type="submit" id="submit-button" disabled>🚀 Upload to BigQuery</button>
     </form>
     
     <div id="status-message"></div>
@@ -32,20 +45,118 @@
     <script>
         const form = document.getElementById('upload-form');
         const statusMessage = document.getElementById('status-message');
+        const submitButton = document.getElementById('submit-button');
+
+        const inputs = {
+            identifies: document.getElementById('identifies'),
+            groups: document.getElementById('groups'),
+            events: document.getElementById('events')
+        };
+
+        const validationStatus = {
+            identifies: false,
+            groups: false,
+            events: false
+        };
+
+        // **THE FIX**: Stricter validation rules with required and forbidden columns.
+        const VALIDATION_RULES = {
+            identifies: {
+                required: ['user_id', 'traits'],
+                forbidden: ['group_id', 'properties']
+            },
+            groups: {
+                required: ['group_id', 'traits'],
+                forbidden: ['properties']
+            },
+            events: {
+                required: ['type', 'properties'],
+                forbidden: ['group_id', 'traits']
+            }
+        };
+
+        function getFileHeader(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    const text = event.target.result;
+                    const firstLine = text.split('\n')[0].trim();
+                    const headers = firstLine.split(',').map(h => h.replace(/"/g, ''));
+                    resolve(headers);
+                };
+                reader.onerror = (event) => reject(new Error("Error reading file: " + event.target.error.name));
+                reader.readAsText(file.slice(0, 1024));
+            });
+        }
+
+        async function validateFile(file, fileType) {
+            if (!file) {
+                throw new Error(`Please select a file.`);
+            }
+            const headers = await getFileHeader(file);
+            const rules = VALIDATION_RULES[fileType];
+            
+            // Check for required columns
+            for (const col of rules.required) {
+                if (!headers.includes(col)) {
+                    throw new Error(`Invalid file. Header is missing required column: '${col}'.`);
+                }
+            }
+
+            // Check for forbidden columns to detect wrong file types
+            for (const col of rules.forbidden) {
+                if (headers.includes(col)) {
+                    throw new Error(`Wrong file type. Looks like an '${Object.keys(VALIDATION_RULES).find(key => VALIDATION_RULES[key].required.includes(col))}.csv'.`);
+                }
+            }
+        }
+
+        function checkAllFilesValid() {
+            const allValid = Object.values(validationStatus).every(status => status === true);
+            submitButton.disabled = !allValid;
+        }
+
+        async function handleFileValidation(event) {
+            const input = event.target;
+            const fileType = input.name;
+            const errorElement = document.getElementById(`${fileType}-error`);
+            const file = input.files[0];
+
+            errorElement.textContent = '';
+            statusMessage.textContent = '';
+            statusMessage.className = '';
+            validationStatus[fileType] = false;
+
+            if (!file) {
+                checkAllFilesValid();
+                return;
+            }
+
+            try {
+                await validateFile(file, fileType);
+                validationStatus[fileType] = true;
+                console.log(`Validation passed for ${fileType}.csv`);
+            } catch (error) {
+                errorElement.textContent = `Error: ${error.message}`;
+                console.error(`Validation failed for ${fileType}:`, error);
+            } finally {
+                checkAllFilesValid();
+            }
+        }
+
+        Object.values(inputs).forEach(input => {
+            input.addEventListener('change', handleFileValidation);
+        });
 
         form.addEventListener('submit', async (event) => {
             event.preventDefault();
-
-            const formData = new FormData(form);
-            const button = form.querySelector('button');
-
-            // UI feedback
-            button.disabled = true;
-            button.textContent = 'Uploading...';
-            statusMessage.textContent = '';
-            statusMessage.className = '';
+            
+            submitButton.disabled = true;
+            statusMessage.textContent = 'Uploading...';
+            statusMessage.className = 'info';
 
             try {
+                const formData = new FormData(form);
                 const response = await fetch('/upload', {
                     method: 'POST',
                     body: formData,
@@ -60,14 +171,14 @@
                 statusMessage.textContent = responseText;
                 statusMessage.className = 'success';
                 form.reset();
+                Object.keys(validationStatus).forEach(key => validationStatus[key] = false);
+                checkAllFilesValid();
 
             } catch (error) {
                 statusMessage.textContent = `Error: ${error.message}`;
                 statusMessage.className = 'error';
                 console.error('Upload failed:', error);
-            } finally {
-                button.disabled = false;
-                button.textContent = '🚀 Upload to BigQuery';
+                submitButton.disabled = false;
             }
         });
     </script>
