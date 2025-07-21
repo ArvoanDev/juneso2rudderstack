@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>BigQuery Uploader</title>
+    <style>
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; padding: 2rem; }
+        form { display: flex; flex-direction: column; gap: 1rem; border: 1px solid #ccc; padding: 2rem; border-radius: 8px; }
+        button { font-size: 1.1rem; padding: 10px 20px; cursor: pointer; }
+        #status-message { margin-top: 1rem; font-weight: bold; padding: 1rem; border-radius: 5px; }
+        .success { background-color: #d4edda; color: #155724; }
+        .error { background-color: #f8d7da; color: #721c24; }
+    </style>
+</head>
+<body>
+    <h1>Upload Data to BigQuery</h1>
+    <form id="upload-form">
+        <label for="identifies">Identifies CSV:</label>
+        <input type="file" id="identifies" name="identifies" accept=".csv" required>
+
+        <label for="groups">Groups CSV:</label>
+        <input type="file" id="groups" name="groups" accept=".csv" required>
+
+        <label for="events">Events CSV:</label>
+        <input type="file" id="events" name="events" accept=".csv" required>
+
+        <button type="submit">🚀 Upload to BigQuery</button>
+    </form>
+    
+    <div id="status-message"></div>
+
+    <script>
+        const form = document.getElementById('upload-form');
+        const statusMessage = document.getElementById('status-message');
+
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+
+            const formData = new FormData(form);
+            const button = form.querySelector('button');
+
+            // UI feedback
+            button.disabled = true;
+            button.textContent = 'Uploading...';
+            statusMessage.textContent = '';
+            statusMessage.className = '';
+
+            try {
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData,
+                });
+
+                const responseText = await response.text();
+
+                if (!response.ok) {
+                    throw new Error(responseText || `HTTP error! Status: ${response.status}`);
+                }
+
+                statusMessage.textContent = responseText;
+                statusMessage.className = 'success';
+                form.reset();
+
+            } catch (error) {
+                statusMessage.textContent = `Error: ${error.message}`;
+                statusMessage.className = 'error';
+                console.error('Upload failed:', error);
+            } finally {
+                button.disabled = false;
+                button.textContent = '🚀 Upload to BigQuery';
+            }
+        });
+    </script>
+</body>
+</html>
