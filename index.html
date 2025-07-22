@@ -183,7 +183,6 @@
         }
         .copy-btn { padding: 8px 16px; font-size: 0.9rem; background: #fff; color: var(--primary-start); border: 2px solid var(--primary-start); }
 
-        /* --- NEW: Dry Run Checkbox Styles --- */
         .dry-run-container {
             display: flex;
             align-items: center;
@@ -194,6 +193,12 @@
             cursor: pointer;
             font-weight: 500;
         }
+        
+        .results-container { width: 100%; }
+        #sql-view, #tracking-plan-view { display: none; }
+        #tracking-plan-table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+        #tracking-plan-table th, #tracking-plan-table td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        #tracking-plan-table th { background-color: #eef2ff; color: var(--heading-color); }
     </style>
 </head>
 <body>
@@ -214,12 +219,10 @@
             <input type="file" id="events" name="events" accept=".csv" required>
             <small id="events-error" class="file-error-message"></small>
         </div>
-
         <div class="dry-run-container">
             <input type="checkbox" id="dry-run" name="dryRun">
-            <label for="dry-run">Dry Run (only generate SQL queries)</label>
+            <label for="dry-run">Dry Run (only generate SQL & Tracking Plan)</label>
         </div>
-
         <button type="submit" id="submit-button" disabled>🚀 Upload to BigQuery</button>
     </form>
     
@@ -238,7 +241,7 @@
         };
 
         const validationStatus = { identifies: false, groups: false, events: false };
-        let sqlData = {};
+        let serverData = {};
 
         const VALIDATION_RULES = {
             identifies: { required: ['user_id', 'traits'], forbidden: ['group_id', 'properties'] },
@@ -286,19 +289,13 @@
         }
 
         Object.values(inputs).forEach(input => input.addEventListener('change', handleFileValidation));
-
-        // Update button text based on dry run checkbox
         dryRunCheckbox.addEventListener('change', () => {
-            if (dryRunCheckbox.checked) {
-                submitButton.innerHTML = '🚀 Get SQL Queries';
-            } else {
-                submitButton.innerHTML = '🚀 Upload to BigQuery';
-            }
+            submitButton.innerHTML = dryRunCheckbox.checked ? '🚀 Get SQL & Tracking Plan' : '🚀 Upload to BigQuery';
         });
 
         function displaySql(queryType) {
-            const header = queryType === 'view' ? sqlData.viewHeader : sqlData.mergeHeader;
-            const queries = queryType === 'view' ? sqlData.viewQueries : sqlData.mergeQueries;
+            const header = queryType === 'view' ? serverData.viewHeader : serverData.mergeHeader;
+            const queries = queryType === 'view' ? serverData.viewQueries : serverData.mergeQueries;
             const fullSql = header + '\n\n' + queries.map(item => item.query).join('\n\n');
             const codeBlock = document.getElementById('sql-code-block');
             
@@ -307,6 +304,28 @@
 
             document.getElementById('view-btn').classList.toggle('active', queryType === 'view');
             document.getElementById('merge-btn').classList.toggle('active', queryType === 'merge');
+        }
+
+        function displayTrackingPlan() {
+            const tableBody = document.getElementById('tracking-plan-tbody');
+            let tableHtml = '';
+            serverData.trackingPlan.forEach(rule => {
+                if (rule.properties.length === 0) {
+                    tableHtml += `<tr><td>${rule.ruleType}</td><td>${rule.ruleName}</td><td></td><td>-</td><td></td></tr>`;
+                } else {
+                    rule.properties.forEach((prop, index) => {
+                        tableHtml += `<tr>`;
+                        if (index === 0) {
+                            tableHtml += `<td rowspan="${rule.properties.length}">${rule.ruleType}</td>`;
+                            tableHtml += `<td rowspan="${rule.properties.length}">${rule.ruleName}</td>`;
+                            tableHtml += `<td rowspan="${rule.properties.length}"></td>`;
+                        }
+                        tableHtml += `<td>${prop}</td><td></td>`;
+                        tableHtml += `</tr>`;
+                    });
+                }
+            });
+            tableBody.innerHTML = tableHtml;
         }
 
         function copySqlToClipboard() {
@@ -318,47 +337,108 @@
                 setTimeout(() => { copyButton.textContent = originalText; }, 2000);
             });
         }
+        
+        function exportTrackingPlanToCSV() {
+            let csvContent = "Rule Type,Rule Name,Description,Property Name,Property Description\n";
+            serverData.trackingPlan.forEach(rule => {
+                if (rule.properties.length === 0) {
+                    csvContent += `${rule.ruleType},${rule.ruleName},,,\n`;
+                } else {
+                    rule.properties.forEach((prop, index) => {
+                        if (index === 0) {
+                            csvContent += `${rule.ruleType},${rule.ruleName},,${prop},\n`;
+                        } else {
+                            csvContent += `,,,${prop},\n`;
+                        }
+                    });
+                }
+            });
+
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a");
+            const url = URL.createObjectURL(blob);
+            link.setAttribute("href", url);
+            link.setAttribute("download", "tracking-plan.csv");
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        function showView(viewToShow) {
+            document.getElementById('sql-view').style.display = 'none';
+            document.getElementById('tracking-plan-view').style.display = 'none';
+            document.getElementById(viewToShow).style.display = 'block';
+
+            document.getElementById('sql-toggle-btn').classList.toggle('active', viewToShow === 'sql-view');
+            document.getElementById('plan-toggle-btn').classList.toggle('active', viewToShow === 'tracking-plan-view');
+            
+            const copyBtn = document.getElementById('copy-btn');
+            const exportBtn = document.getElementById('export-btn');
+            copyBtn.style.display = viewToShow === 'sql-view' ? 'block' : 'none';
+            exportBtn.style.display = viewToShow === 'tracking-plan-view' ? 'block' : 'none';
+        }
 
         form.addEventListener('submit', async (event) => {
             event.preventDefault();
             submitButton.disabled = true;
             statusMessage.innerHTML = '';
-            statusMessage.textContent = dryRunCheckbox.checked ? 'Generating SQL...' : 'Uploading...';
+            statusMessage.textContent = dryRunCheckbox.checked ? 'Generating SQL & Plan...' : 'Uploading...';
             statusMessage.className = 'info';
 
             try {
                 const formData = new FormData(form);
-                // The checkbox value is automatically included in formData
                 const response = await fetch('/upload', { method: 'POST', body: formData });
                 if (!response.ok) throw new Error(await response.text() || `HTTP error! Status: ${response.status}`);
                 
-                sqlData = await response.json();
+                serverData = await response.json();
                 
                 const resultHtml = `
-                    <h3>${sqlData.message}</h3>
+                    <h3>${dryRunCheckbox.checked ? 'Dry Run Successful' : 'Upload Successful!'}</h3>
                     <div class="explainer">
-                        <strong>Next Steps:</strong> The queries below are for merging your historical data. 
-                        You must replace <code>your_live_rudderstack_dataset</code> with the name of your actual production dataset in BigQuery. 
-                        Then, run the queries from one of the tabs in your BigQuery SQL workspace.
+                        <strong>Next Steps:</strong> Review the generated Tracking Plan or use the SQL queries to merge your data. 
+                        For SQL, you must replace <code>your_live_rudderstack_dataset</code> with your production dataset name.
                     </div>
-                    <div class="sql-controls">
-                        <div class="toggle-container">
-                            <button id="view-btn" class="toggle-btn">Views (Recommended)</button>
-                            <button id="merge-btn" class="toggle-btn">Merge (Destructive)</button>
+                    <div class="results-container">
+                        <div class="results-controls">
+                            <div class="toggle-container">
+                                <button id="sql-toggle-btn" class="toggle-btn">SQL Queries</button>
+                                <button id="plan-toggle-btn" class="toggle-btn">Tracking Plan</button>
+                            </div>
+                            <div>
+                                <button id="copy-btn" class="action-btn">Copy SQL</button>
+                                <button id="export-btn" class="action-btn" style="display:none;">Export to CSV</button>
+                            </div>
                         </div>
-                        <button id="copy-btn" class="copy-btn">Copy SQL</button>
+                        <div id="sql-view">
+                            <div class="toggle-container">
+                                <button id="view-btn" class="toggle-btn">Views (Recommended)</button>
+                                <button id="merge-btn" class="toggle-btn">Merge (Destructive)</button>
+                            </div>
+                            <pre><code id="sql-code-block" class="language-sql"></code></pre>
+                        </div>
+                        <div id="tracking-plan-view">
+                            <table id="tracking-plan-table">
+                                <thead><tr><th>Rule Type</th><th>Rule Name</th><th>Description</th><th>Property Name</th><th>Property Description</th></tr></thead>
+                                <tbody id="tracking-plan-tbody"></tbody>
+                            </table>
+                        </div>
                     </div>
-                    <pre><code id="sql-code-block" class="language-sql"></code></pre>
                 `;
 
                 statusMessage.innerHTML = resultHtml;
                 statusMessage.className = 'success';
                 
-                displaySql('view');
-                
+                document.getElementById('sql-toggle-btn').addEventListener('click', () => showView('sql-view'));
+                document.getElementById('plan-toggle-btn').addEventListener('click', () => showView('tracking-plan-view'));
                 document.getElementById('view-btn').addEventListener('click', () => displaySql('view'));
                 document.getElementById('merge-btn').addEventListener('click', () => displaySql('merge'));
                 document.getElementById('copy-btn').addEventListener('click', copySqlToClipboard);
+                document.getElementById('export-btn').addEventListener('click', exportTrackingPlanToCSV);
+
+                displaySql('view');
+                displayTrackingPlan();
+                showView('sql-view');
 
                 form.reset();
                 Object.keys(validationStatus).forEach(key => validationStatus[key] = false);
