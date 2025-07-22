@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <title>June.so to BigQuery Uploader</title>
-    <!-- For SQL syntax highlighting -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-light.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
 
     <style>
         :root {
@@ -41,6 +41,41 @@
             margin-bottom: 2rem;
             font-weight: 600;
         }
+        
+        .main-container {
+            display: flex;
+            gap: 2rem;
+            width: 100%;
+            max-width: 1400px;
+            align-items: flex-start;
+            flex-wrap: wrap;
+            box-sizing: border-box;
+        }
+
+        /* Adjust these if needed */
+        .form-container {
+            flex: 1 1 400px;
+            min-width: 320px;
+            max-width: 500px;
+            min-height: 400px;
+            box-sizing: border-box;
+            z-index: 1;
+            margin-bottom: 2rem;
+            overflow: hidden;
+        }
+
+        #tracking-plan-container {
+            flex: 1.5 1 600px;
+            min-width: 320px;
+            max-width: 800px;
+            min-height: 400px;
+            box-sizing: border-box;
+            margin-left: 0;
+            z-index: 0;
+            overflow: hidden;
+            overflow-y: auto;
+            
+        }
 
         form {
             display: flex;
@@ -51,188 +86,132 @@
             border-radius: 12px;
             box-shadow: 0 4px 25px rgba(0, 0, 0, 0.07);
             width: 100%;
-            max-width: 500px;
+            max-width: 100%;
             border: 1px solid #e0e0e0;
+            overflow-wrap: break-word;
+            box-sizing: border-box;
         }
 
-        .file-input-group {
-            display: flex;
-            flex-direction: column;
-            gap: 0.5rem;
-        }
-        
-        label {
-            font-weight: 600;
-            color: #2c3e50;
-        }
+        .file-input-group { display: flex; flex-direction: column; gap: 0.5rem; }
+        label { font-weight: 600; color: #2c3e50; }
 
         input[type="file"]::file-selector-button {
-            font-weight: bold;
-            color: #fff;
-            background: linear-gradient(90deg, var(--primary-start) 0%, var(--primary-end) 100%);
-            padding: 0.5em 1em;
-            border: none;
-            border-radius: 6px;
-            cursor: pointer;
-            transition: background 0.2s ease-in-out;
+            font-weight: bold; color: #fff; background: linear-gradient(90deg, var(--primary-start) 0%, var(--primary-end) 100%);
+            padding: 0.5em 1em; border: none; border-radius: 6px; cursor: pointer; transition: background 0.2s ease-in-out;
         }
-
-        input[type="file"]::file-selector-button:hover {
-            background: linear-gradient(90deg, var(--primary-hover-start) 0%, var(--primary-hover-end) 100%);
-        }
+        input[type="file"]::file-selector-button:hover { background: linear-gradient(90deg, var(--primary-hover-start) 0%, var(--primary-hover-end) 100%); }
 
         button {
-            font-size: 1.1rem;
-            font-weight: 600;
-            padding: 12px 20px;
-            cursor: pointer;
-            border: none;
-            border-radius: 8px;
-            color: white;
-            background: linear-gradient(90deg, var(--primary-start) 0%, var(--primary-end) 100%);
-            transition: all 0.2s ease-in-out;
-            box-shadow: 0 4px 6px rgba(50, 50, 93, 0.11), 0 1px 3px rgba(0, 0, 0, 0.08);
+            font-size: 1.1rem; font-weight: 600; padding: 12px 20px; cursor: pointer; border: none;
+            border-radius: 8px; color: white; background: linear-gradient(90deg, var(--primary-start) 0%, var(--primary-end) 100%);
+            transition: all 0.2s ease-in-out; box-shadow: 0 4px 6px rgba(50, 50, 93, 0.11), 0 1px 3px rgba(0, 0, 0, 0.08);
         }
-
-        button:hover:not(:disabled) {
-            transform: translateY(-2px);
-            box-shadow: 0 7px 14px rgba(50, 50, 93, 0.1), 0 3px 6px rgba(0, 0, 0, 0.08);
-        }
-
-        button:disabled {
-            cursor: not-allowed;
-            background: var(--disabled-bg);
-            box-shadow: none;
-        }
+        button:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 7px 14px rgba(50, 50, 93, 0.1), 0 3px 6px rgba(0, 0, 0, 0.08); }
+        button:disabled { cursor: not-allowed; background: var(--disabled-bg); box-shadow: none; }
 
         #status-message {
-            margin-top: 1.5rem;
-            font-weight: 500;
-            padding: 1.5rem;
-            border-radius: 8px;
-            width: 100%;
-            max-width: 800px; 
-            box-sizing: border-box;
-            text-align: left;
-            opacity: 0;
-            transition: opacity 0.3s ease;
+            margin-top: 1.5rem; font-weight: 500; padding: 1.5rem; border-radius: 8px; width: 100%;
+            box-sizing: border-box; text-align: left; opacity: 0; transition: opacity 0.3s ease;
         }
+        #status-message:not(:empty) { opacity: 1; }
         
-        #status-message:not(:empty) {
-            opacity: 1;
-        }
-        
-        #status-message pre {
-            background-color: #eef2ff;
-            padding: 1rem;
-            border-radius: 6px;
-            white-space: pre-wrap;
-            word-wrap: break-word;
-            font-family: monospace;
-            font-size: 0.9rem;
-            margin-top: 1rem;
-            margin-bottom: 1rem;
-            max-height: 400px;
-            overflow-y: auto;
-        }
-        #status-message pre::-webkit-scrollbar { width: 8px; }
-        #status-message pre::-webkit-scrollbar-track { background: #e0e7ff; border-radius: 4px; }
-        #status-message pre::-webkit-scrollbar-thumb { background: #a5b4fc; border-radius: 4px; }
-        #status-message pre::-webkit-scrollbar-thumb:hover { background: #818cf8; }
-
-        #status-message h3 { margin-top: 0; color: var(--success-text); }
-        
-        .explainer {
-            font-size: 0.95rem;
-            line-height: 1.5;
-            background-color: #eef2ff;
-            padding: 1rem;
-            border-radius: 6px;
-            border-left: 4px solid var(--primary-start);
-            margin-bottom: 1.5rem;
-        }
-        .explainer code {
-            background-color: #d1d5db;
-            padding: 2px 5px;
-            border-radius: 4px;
-            font-family: monospace;
-        }
-
         .success { background-color: var(--success-bg); color: var(--success-text); }
         .error { background-color: var(--error-bg); color: var(--error-text); }
         .info { background-color: var(--info-bg); color: var(--info-text); text-align: center; }
         .file-error-message { color: var(--error-text); font-size: 0.9rem; font-weight: 600; min-height: 1.2em; }
+        .dry-run-container { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem; }
+        .dry-run-container label { cursor: pointer; font-weight: 500; }
+        
+        #tracking-plan-container {
+            flex: 1.5 1 600px;
+            min-width: 320px;
+            max-width: 800px;
+            background-color: var(--form-bg);
+            padding: 1rem;
+            border-radius: 12px;
+            box-shadow: 0 4px 25px rgba(0, 0, 0, 0.07);
+            border: 1px solid #e0e0e0;
+            display: none;
+            box-sizing: border-box;
+            margin-left: 0;
+        }
+        .plan-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
+        .plan-header h2 { margin: 0; color: var(--heading-color); }
+        .table-wrapper { max-height: 60vh; overflow-y: auto; }
+        #tracking-plan-table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+        #tracking-plan-table th, #tracking-plan-table td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        #tracking-plan-table th { background-color: #eef2ff; color: var(--heading-color); position: sticky; top: 0; }
+        .action-btn { padding: 8px 16px; font-size: 0.9rem; background: #fff; color: var(--primary-start); border: 2px solid var(--primary-start); }
 
         .sql-controls { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
         .toggle-container { display: flex; background-color: #e9e9f0; border-radius: 8px; padding: 4px; }
-        .toggle-btn {
-            font-size: 0.9rem;
-            font-weight: 600;
-            padding: 8px 16px;
-            border: none;
-            border-radius: 6px;
-            background-color: transparent;
-            color: #555;
-            cursor: pointer;
-            transition: all 0.3s ease;
+        .toggle-btn { font-size: 0.9rem; font-weight: 600; padding: 8px 16px; border: none; border-radius: 6px; background-color: transparent; color: #555; cursor: pointer; transition: all 0.3s ease; }
+        .toggle-btn.active { background: linear-gradient(90deg, var(--primary-start) 0%, var(--primary-end) 100%); color: white; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        #status-message pre { background-color: #eef2ff; padding: 1rem; border-radius: 6px; white-space: pre-wrap; word-wrap: break-word; font-family: monospace; font-size: 0.9rem; margin-top: 1rem; margin-bottom: 1rem; max-height: 400px; overflow-y: auto; }
+        /* Responsive fix for overlap */
+        @media (max-width: 1100px) {
+            .main-container {
+                flex-direction: column;
+                gap: 2rem;
+            }
+            .form-container, #tracking-plan-container {
+                max-width: 100%;
+                min-width: 0;
+            }
+            .form-container {
+                margin-bottom: 2rem;
+            }
         }
-        .toggle-btn.active {
-            background: linear-gradient(90deg, var(--primary-start) 0%, var(--primary-end) 100%);
-            color: white;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        .copy-btn { padding: 8px 16px; font-size: 0.9rem; background: #fff; color: var(--primary-start); border: 2px solid var(--primary-start); }
-
-        .dry-run-container {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            margin-top: 0.5rem;
-        }
-        .dry-run-container label {
-            cursor: pointer;
-            font-weight: 500;
-        }
-        
-        .results-container { width: 100%; }
-        #sql-view, #tracking-plan-view { display: none; }
-        #tracking-plan-table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
-        #tracking-plan-table th, #tracking-plan-table td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-        #tracking-plan-table th { background-color: #eef2ff; color: var(--heading-color); }
     </style>
 </head>
 <body>
-    <h1>Upload June.so Data to BigQuery</h1>
-    <form id="upload-form">
-        <div class="file-input-group">
-            <label for="identifies">Identifies CSV:</label>
-            <input type="file" id="identifies" name="identifies" accept=".csv" required>
-            <small id="identifies-error" class="file-error-message"></small>
+    <h1>June.so to RudderStack/BigQuery Migration Tool</h1>
+    <div class="main-container">
+        <div class="form-container">
+            <form id="upload-form">
+                <div class="file-input-group">
+                    <label for="identifies">Identifies CSV:</label>
+                    <input type="file" id="identifies" name="identifies" accept=".csv" required>
+                    <small id="identifies-error" class="file-error-message"></small>
+                </div>
+                <div class="file-input-group">
+                    <label for="groups">Groups CSV:</label>
+                    <input type="file" id="groups" name="groups" accept=".csv" required>
+                    <small id="groups-error" class="file-error-message"></small>
+                </div>
+                <div class="file-input-group">
+                    <label for="events">Events CSV:</label>
+                    <input type="file" id="events" name="events" accept=".csv" required>
+                    <small id="events-error" class="file-error-message"></small>
+                </div>
+                <div class="dry-run-container">
+                    <input type="checkbox" id="dry-run" name="dryRun">
+                    <label for="dry-run">Dry Run (only generate SQL)</label>
+                </div>
+                <button type="submit" id="submit-button" disabled>🚀 Upload to BigQuery</button>
+            </form>
+            <div id="status-message"></div>
         </div>
-        <div class="file-input-group">
-            <label for="groups">Groups CSV:</label>
-            <input type="file" id="groups" name="groups" accept=".csv" required>
-            <small id="groups-error" class="file-error-message"></small>
+        <div id="tracking-plan-container">
+            <div class="plan-header">
+                <h2>Generated Tracking Plan</h2>
+                <button id="export-btn" class="action-btn">Export to CSV</button>
+            </div>
+            <div class="table-wrapper">
+                <table id="tracking-plan-table">
+                    <thead><tr><th>Rule Type</th><th>Rule Name</th><th>Property Name</th></tr></thead>
+                    <tbody id="tracking-plan-tbody"></tbody>
+                </table>
+            </div>
         </div>
-        <div class="file-input-group">
-            <label for="events">Events CSV:</label>
-            <input type="file" id="events" name="events" accept=".csv" required>
-            <small id="events-error" class="file-error-message"></small>
-        </div>
-        <div class="dry-run-container">
-            <input type="checkbox" id="dry-run" name="dryRun">
-            <label for="dry-run">Dry Run (only generate SQL & Tracking Plan)</label>
-        </div>
-        <button type="submit" id="submit-button" disabled>🚀 Upload to BigQuery</button>
-    </form>
-    
-    <div id="status-message"></div>
+    </div>
 
     <script>
         const form = document.getElementById('upload-form');
         const statusMessage = document.getElementById('status-message');
         const submitButton = document.getElementById('submit-button');
         const dryRunCheckbox = document.getElementById('dry-run');
+        const trackingPlanContainer = document.getElementById('tracking-plan-container');
 
         const inputs = {
             identifies: document.getElementById('identifies'),
@@ -242,6 +221,7 @@
 
         const validationStatus = { identifies: false, groups: false, events: false };
         let serverData = {};
+        let trackingPlanData = [];
 
         const VALIDATION_RULES = {
             identifies: { required: ['user_id', 'traits'], forbidden: ['group_id', 'properties'] },
@@ -249,25 +229,127 @@
             events: { required: ['type', 'properties'], forbidden: ['group_id', 'traits'] }
         };
 
-        function getFileHeader(file) {
+        const flattenObject = (obj) => {
+            const result = {};
+            if (!obj || typeof obj !== 'object') return result;
+            for (let [key, value] of Object.entries(obj)) {
+                if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+                    Object.assign(result, flattenObject(value));
+                } else {
+                    result[key] = value;
+                }
+            }
+            return result;
+        };
+
+        function parseCsvFile(file) {
             return new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onload = (e) => resolve(e.target.result.split('\n')[0].trim().split(',').map(h => h.replace(/"/g, '')));
-                reader.onerror = (e) => reject(new Error("Error reading file: " + e.target.error.name));
-                reader.readAsText(file.slice(0, 1024));
+                Papa.parse(file, {
+                    header: true,
+                    skipEmptyLines: true,
+                    complete: (results) => resolve(results.data),
+                    error: (error) => reject(error)
+                });
             });
+        }
+
+        async function generateTrackingPlan() {
+            const [identifiesRows, groupsRows, eventsRows] = await Promise.all([
+                parseCsvFile(inputs.identifies.files[0]),
+                parseCsvFile(inputs.groups.files[0]),
+                parseCsvFile(inputs.events.files[0])
+            ]);
+
+            const plan = [];
+            const identifyProperties = new Set();
+            identifiesRows.forEach(row => {
+                try {
+                    const traits = JSON.parse(row.traits || '{}');
+                    Object.keys(flattenObject(traits)).forEach(prop => identifyProperties.add(prop));
+                } catch {}
+            });
+            if (identifiesRows.length > 0) {
+                plan.push({ ruleType: 'identify', ruleName: 'Identify', properties: Array.from(identifyProperties).sort() });
+            }
+
+            const groupProperties = new Set();
+            groupsRows.forEach(row => {
+                try {
+                    const traits = JSON.parse(row.traits || '{}');
+                    Object.keys(flattenObject(traits)).forEach(prop => groupProperties.add(prop));
+                } catch {}
+            });
+            if (groupsRows.length > 0) {
+                plan.push({ ruleType: 'group', ruleName: 'Group', properties: Array.from(groupProperties).sort() });
+            }
+
+            const eventsByTypeAndName = {};
+            eventsRows.forEach(row => {
+                const type = row.type === '0' ? 'page' : 'track';
+                let name = row.name;
+                if (type === 'page') {
+                    try {
+                        const props = JSON.parse(row.properties || '{}');
+                        name = (props && typeof props.name === 'string' && props.name.trim()) ? props.name.trim() : '(Not Set)';
+                    } catch { name = '(Not Set)'; }
+                }
+                
+                const key = `${type}:${name}`;
+                if (!eventsByTypeAndName[key]) {
+                    eventsByTypeAndName[key] = { ruleType: type, ruleName: name, properties: new Set() };
+                }
+                
+                try {
+                    const properties = JSON.parse(row.properties || '{}');
+                    Object.keys(flattenObject(properties)).forEach(prop => eventsByTypeAndName[key].properties.add(prop));
+                } catch {}
+            });
+
+            Object.values(eventsByTypeAndName).forEach(event => {
+                plan.push({ ...event, properties: Array.from(event.properties).sort() });
+            });
+
+            return plan.sort((a, b) => a.ruleName.localeCompare(b.ruleName));
+        }
+
+        async function renderTrackingPlan() {
+            trackingPlanContainer.style.display = 'block';
+            const tableBody = document.getElementById('tracking-plan-tbody');
+            tableBody.innerHTML = '<tr><td colspan="3">Generating plan...</td></tr>';
+
+            trackingPlanData = await generateTrackingPlan();
+            
+            let tableHtml = '';
+            trackingPlanData.forEach(rule => {
+                if (rule.properties.length === 0) {
+                    tableHtml += `<tr><td>${rule.ruleType}</td><td>${rule.ruleName}</td><td>-</td></tr>`;
+                } else {
+                    rule.properties.forEach((prop, index) => {
+                        tableHtml += `<tr>`;
+                        if (index === 0) {
+                            tableHtml += `<td rowspan="${rule.properties.length}">${rule.ruleType}</td>`;
+                            tableHtml += `<td rowspan="${rule.properties.length}">${rule.ruleName}</td>`;
+                        }
+                        tableHtml += `<td>${prop}</td>`;
+                        tableHtml += `</tr>`;
+                    });
+                }
+            });
+            tableBody.innerHTML = tableHtml;
         }
 
         async function validateFile(file, fileType) {
             if (!file) throw new Error(`Please select a file.`);
-            const headers = await getFileHeader(file);
+            const headers = (await parseCsvFile(file.slice(0, 1024)))[0] ? Object.keys((await parseCsvFile(file.slice(0, 1024)))[0]) : [];
             const rules = VALIDATION_RULES[fileType];
             for (const col of rules.required) if (!headers.includes(col)) throw new Error(`Invalid file. Header missing: '${col}'.`);
             for (const col of rules.forbidden) if (headers.includes(col)) throw new Error(`Wrong file type. Looks like an '${Object.keys(VALIDATION_RULES).find(key => VALIDATION_RULES[key].required.includes(col))}.csv'.`);
         }
 
         function checkAllFilesValid() {
-            submitButton.disabled = !Object.values(validationStatus).every(s => s === true);
+            const allValid = Object.values(validationStatus).every(s => s === true);
+            submitButton.disabled = !allValid;
+            return allValid;
         }
 
         async function handleFileValidation(event) {
@@ -277,6 +359,8 @@
             statusMessage.textContent = '';
             statusMessage.className = '';
             validationStatus[fileType] = false;
+            trackingPlanContainer.style.display = 'none';
+
             if (!files[0]) { checkAllFilesValid(); return; }
             try {
                 await validateFile(files[0], fileType);
@@ -284,106 +368,77 @@
             } catch (error) {
                 errorElement.textContent = `Error: ${error.message}`;
             } finally {
-                checkAllFilesValid();
+                if (checkAllFilesValid()) {
+                    renderTrackingPlan();
+                }
             }
         }
 
         Object.values(inputs).forEach(input => input.addEventListener('change', handleFileValidation));
         dryRunCheckbox.addEventListener('change', () => {
-            submitButton.innerHTML = dryRunCheckbox.checked ? '🚀 Get SQL & Tracking Plan' : '🚀 Upload to BigQuery';
+            submitButton.innerHTML = dryRunCheckbox.checked ? '🚀 Get SQL Queries' : '🚀 Upload to BigQuery';
         });
+
+        function copySqlToClipboard() {
+            const codeBlock = document.getElementById('sql-code-block');
+            const text = codeBlock.textContent;
+            
+            navigator.clipboard.writeText(text)
+                .then(() => {
+                    const copyBtn = document.getElementById('copy-btn');
+                    const originalText = copyBtn.textContent;
+                    copyBtn.textContent = 'Copied!';
+                    setTimeout(() => {
+                        copyBtn.textContent = originalText;
+                    }, 2000);
+                })
+                .catch(err => {
+                    console.error('Failed to copy: ', err);
+                    alert('Failed to copy SQL to clipboard');
+                });
+        }
 
         function displaySql(queryType) {
             const header = queryType === 'view' ? serverData.viewHeader : serverData.mergeHeader;
             const queries = queryType === 'view' ? serverData.viewQueries : serverData.mergeQueries;
             const fullSql = header + '\n\n' + queries.map(item => item.query).join('\n\n');
             const codeBlock = document.getElementById('sql-code-block');
-            
             const highlightedCode = hljs.highlight(fullSql, { language: 'sql' }).value;
             codeBlock.innerHTML = highlightedCode;
-
             document.getElementById('view-btn').classList.toggle('active', queryType === 'view');
             document.getElementById('merge-btn').classList.toggle('active', queryType === 'merge');
         }
 
-        function displayTrackingPlan() {
-            const tableBody = document.getElementById('tracking-plan-tbody');
-            let tableHtml = '';
-            serverData.trackingPlan.forEach(rule => {
-                if (rule.properties.length === 0) {
-                    tableHtml += `<tr><td>${rule.ruleType}</td><td>${rule.ruleName}</td><td></td><td>-</td><td></td></tr>`;
-                } else {
-                    rule.properties.forEach((prop, index) => {
-                        tableHtml += `<tr>`;
-                        if (index === 0) {
-                            tableHtml += `<td rowspan="${rule.properties.length}">${rule.ruleType}</td>`;
-                            tableHtml += `<td rowspan="${rule.properties.length}">${rule.ruleName}</td>`;
-                            tableHtml += `<td rowspan="${rule.properties.length}"></td>`;
-                        }
-                        tableHtml += `<td>${prop}</td><td></td>`;
-                        tableHtml += `</tr>`;
-                    });
-                }
-            });
-            tableBody.innerHTML = tableHtml;
-        }
-
-        function copySqlToClipboard() {
-            const codeBlock = document.getElementById('sql-code-block');
-            navigator.clipboard.writeText(codeBlock.textContent).then(() => {
-                const copyButton = document.getElementById('copy-btn');
-                const originalText = copyButton.textContent;
-                copyButton.textContent = 'Copied!';
-                setTimeout(() => { copyButton.textContent = originalText; }, 2000);
-            });
-        }
-        
         function exportTrackingPlanToCSV() {
             let csvContent = "Rule Type,Rule Name,Description,Property Name,Property Description\n";
-            serverData.trackingPlan.forEach(rule => {
+            trackingPlanData.forEach(rule => {
                 if (rule.properties.length === 0) {
                     csvContent += `${rule.ruleType},${rule.ruleName},,,\n`;
                 } else {
                     rule.properties.forEach((prop, index) => {
-                        if (index === 0) {
-                            csvContent += `${rule.ruleType},${rule.ruleName},,${prop},\n`;
-                        } else {
-                            csvContent += `,,,${prop},\n`;
-                        }
+                        if (index === 0) csvContent += `${rule.ruleType},${rule.ruleName},,${prop},\n`;
+                        else csvContent += `,,,${prop},\n`;
                     });
                 }
             });
-
             const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
             const link = document.createElement("a");
             const url = URL.createObjectURL(blob);
             link.setAttribute("href", url);
             link.setAttribute("download", "tracking-plan.csv");
-            link.style.visibility = 'hidden';
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
         }
 
-        function showView(viewToShow) {
-            document.getElementById('sql-view').style.display = 'none';
-            document.getElementById('tracking-plan-view').style.display = 'none';
-            document.getElementById(viewToShow).style.display = 'block';
-
-            document.getElementById('sql-toggle-btn').classList.toggle('active', viewToShow === 'sql-view');
-            document.getElementById('plan-toggle-btn').classList.toggle('active', viewToShow === 'tracking-plan-view');
-            
-            const copyBtn = document.getElementById('copy-btn');
-            const exportBtn = document.getElementById('export-btn');
-            copyBtn.style.display = viewToShow === 'sql-view' ? 'block' : 'none';
-            exportBtn.style.display = viewToShow === 'tracking-plan-view' ? 'block' : 'none';
-        }
+        // **THE FIX**: Attach the export button listener on page load.
+        document.getElementById('export-btn').addEventListener('click', exportTrackingPlanToCSV);
 
         form.addEventListener('submit', async (event) => {
             event.preventDefault();
             submitButton.disabled = true;
             statusMessage.innerHTML = '';
-            statusMessage.textContent = dryRunCheckbox.checked ? 'Generating SQL & Plan...' : 'Uploading...';
+            statusMessage.textContent = dryRunCheckbox.checked ? 'Generating SQL...' : 'Uploading...';
             statusMessage.className = 'info';
 
             try {
@@ -396,54 +451,28 @@
                 const resultHtml = `
                     <h3>${dryRunCheckbox.checked ? 'Dry Run Successful' : 'Upload Successful!'}</h3>
                     <div class="explainer">
-                        <strong>Next Steps:</strong> Review the generated Tracking Plan or use the SQL queries to merge your data. 
-                        For SQL, you must replace <code>your_live_rudderstack_dataset</code> with your production dataset name.
+                        <strong>Next Steps:</strong> Use the SQL queries to merge your data. 
+                        You must replace <code>your_live_rudderstack_dataset</code> with your production dataset name.
                     </div>
-                    <div class="results-container">
-                        <div class="results-controls">
-                            <div class="toggle-container">
-                                <button id="sql-toggle-btn" class="toggle-btn">SQL Queries</button>
-                                <button id="plan-toggle-btn" class="toggle-btn">Tracking Plan</button>
-                            </div>
-                            <div>
-                                <button id="copy-btn" class="action-btn">Copy SQL</button>
-                                <button id="export-btn" class="action-btn" style="display:none;">Export to CSV</button>
-                            </div>
+                    <div class="sql-controls">
+                        <div class="toggle-container">
+                            <button id="view-btn" class="toggle-btn">Views (Recommended)</button>
+                            <button id="merge-btn" class="toggle-btn">Merge (Destructive)</button>
                         </div>
-                        <div id="sql-view">
-                            <div class="toggle-container">
-                                <button id="view-btn" class="toggle-btn">Views (Recommended)</button>
-                                <button id="merge-btn" class="toggle-btn">Merge (Destructive)</button>
-                            </div>
-                            <pre><code id="sql-code-block" class="language-sql"></code></pre>
-                        </div>
-                        <div id="tracking-plan-view">
-                            <table id="tracking-plan-table">
-                                <thead><tr><th>Rule Type</th><th>Rule Name</th><th>Description</th><th>Property Name</th><th>Property Description</th></tr></thead>
-                                <tbody id="tracking-plan-tbody"></tbody>
-                            </table>
-                        </div>
+                        <button id="copy-btn" class="action-btn">Copy SQL</button>
                     </div>
+                    <pre><code id="sql-code-block" class="language-sql"></code></pre>
                 `;
 
                 statusMessage.innerHTML = resultHtml;
                 statusMessage.className = 'success';
                 
-                document.getElementById('sql-toggle-btn').addEventListener('click', () => showView('sql-view'));
-                document.getElementById('plan-toggle-btn').addEventListener('click', () => showView('tracking-plan-view'));
+                displaySql('view');
+                
                 document.getElementById('view-btn').addEventListener('click', () => displaySql('view'));
                 document.getElementById('merge-btn').addEventListener('click', () => displaySql('merge'));
                 document.getElementById('copy-btn').addEventListener('click', copySqlToClipboard);
-                document.getElementById('export-btn').addEventListener('click', exportTrackingPlanToCSV);
-
-                displaySql('view');
-                displayTrackingPlan();
-                showView('sql-view');
-
-                form.reset();
-                Object.keys(validationStatus).forEach(key => validationStatus[key] = false);
-                checkAllFilesValid();
-
+                
             } catch (error) {
                 statusMessage.textContent = `Error: ${error.message}`;
                 statusMessage.className = 'error';
