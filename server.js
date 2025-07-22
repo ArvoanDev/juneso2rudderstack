@@ -268,9 +268,9 @@ app.post('/upload', upload.fields([
             }
         }
         if (groupsRows.length > 0) {
-            processedTables.add('_groups');
+            processedTables.add('groups');
             if (!isDryRun) {
-                await manageSchemaAndInsert('_groups', GROUPS_SCHEMA, groupsRows, 'traits', processedTables);
+                await manageSchemaAndInsert('groups', GROUPS_SCHEMA, groupsRows, 'traits', processedTables);
             }
         }
         if (eventsRows.length > 0) {
