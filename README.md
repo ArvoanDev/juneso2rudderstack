@@ -1,189 +1,101 @@
-# **June.so to BigQuery Migration Tool (RudderStack-Compatible)**
-
-With **June.so shutting down**, you need a reliable way to preserve your valuable product analytics data. This tool is designed specifically for that purpose.  
-It provides a simple web page to upload your standard June.so CSV exports (identifies, groups, and events) and migrate them directly into a Google BigQuery database. The tool automatically formats the data and creates tables that match the official **RudderStack warehouse schema**. This allows you to seamlessly switch your analytics to RudderStack or any other tool that uses BigQuery, without losing your historical data.
-
-## **How It Works (The "Magic")**
-
-Even though it seems simple on the surface, the tool performs several complex tasks automatically to ensure a smooth migration from June.so.
-
-1. **You Upload Your June.so CSV Exports**: On the web page, you select the three standard CSV files provided by the June.so export feature.
-2. **The Server Gets to Work**: When you click "Upload," the files are securely sent to a small server program running locally on your computer. This server is the "brains" of the operation.
-3. **Smart Data Sorting**: The server reads each file and understands the specific structure of June.so's data. It correctly interprets that type 0 in your events file is a "page view" and type 2 is a custom "track" event.
-4. **Automatic Table Creation**: The server connects to your Google BigQuery project.
-   - It automatically creates the standard RudderStack tables: identifies, users, \_groups, pages, and tracks.
-   - For every unique event it finds (like open_modal), it creates a dedicated table for it.
-   - If a table already exists, it intelligently adds any new data columns it discovers without losing existing data.
-5. **Data Formatting (The Most Important Step)**: The server automatically cleans and formats your June.so data to be 100% compatible with the RudderStack schema. It takes complex, nested JSON data (like the context or properties columns) and "flattens" it into individual, query-friendly columns. For example, a context object containing {"app": {"installType": "cdn"}} becomes a BigQuery column named context_app_install_type.
-6. **Loading the Data**: Finally, the server securely loads all the formatted data into the correct tables in your BigQuery database, completing the migration.
-
-## **Step-by-Step Instructions**
-
-Follow these instructions carefully to set up and use the tool. The setup is a one-time process.
-
-### **Part 1: Setting Up Google BigQuery (One-Time Setup)**
-
-Before using the tool, you need to prepare your Google BigQuery account.
-
-#### **Step 1: Create a Google Cloud Project**
-
-A "Project" is the main container for all your cloud resources. If you don't have one, you'll need to create one.
-
-- **Instructions**: Follow the official guide: [Creating and managing projects](https://cloud.google.com/resource-manager/docs/creating-managing-projects).
-
-#### **Step 2: Enable the BigQuery API**
-
-You need to "turn on" the BigQuery service for your project so that our tool can communicate with it.
-
-- **Instructions**: Go to the [BigQuery API page](https://console.cloud.google.com/apis/library/bigquery.googleapis.com) and click the **Enable** button.
-
-#### **Step 3: Create a BigQuery Dataset**
-
-A "Dataset" is like a folder or a database inside your project where your tables will live.
-
-- **Instructions**: Follow the official guide: [Create datasets](https://www.google.com/search?q=https://cloud.google.com/bigquery/docs/datasets%23create-dataset).
-- For the **Dataset ID**, we recommend using rudderstack_data. Remember the name you choose.
-
-#### **Step 4: Create a Service Account**
-
-A "Service Account" is a special, non-human user that our tool will use to log in and upload data on your behalf.
-
-- **Instructions**: Follow the official guide: [Create service accounts](https://www.google.com/search?q=https://cloud.google.com/iam/docs/creating-managing-service-accounts%23creating).
-- Give the service account a descriptive name, like june-migration-tool.
-
-#### **Step 5: Grant Permissions to the Service Account**
-
-You need to give your new Service Account permission to work with BigQuery.
-
-- **Instructions**: Follow the guide on [granting roles](https://www.google.com/search?q=https://cloud.google.com/iam/docs/granting-changing-revoking-access%23grant-single-role).
-- Find the Service Account you just created and grant it the following two roles:
-  1. BigQuery Data Editor
-  2. BigQuery Job User
-
-#### **Step 6: Download the JSON Key**
-
-This key is the password for your Service Account. It's a file that you must keep safe.
-
-- **Instructions**: Follow the guide on [creating service account keys](https://www.google.com/search?q=https://cloud.google.com/iam/docs/creating-managing-service-account-keys%23creating_service_account_keys).
-- When you create the key, make sure to select **JSON** as the key type.
-- A file will be downloaded to your computer. **Rename this file to credentials.json**.
-
-### **Part 2: Setting Up the Uploader Tool (One-Time Setup)**
-
-Now, let's set up the uploader tool on your computer.
-
-#### **Step 1: Install Node.js**
-
-Node.js is the underlying technology that runs the server. If you don't have it, you'll need to install it.
-
-- **Instructions**: Go to the [official Node.js website](https://nodejs.org/en/download/) and download the **LTS** version for your operating system (Windows, Mac, etc.). Run the installer.
-
-#### **Step 2: Download and Place the Project Files**
-
-Download the project folder (e.g., bq-uploader) which contains the files: server.js, index.html, schema.js, package.json, and .env.
-
-#### **Step 3: Place Your Credentials File**
-
-Move the credentials.json file (which you downloaded and renamed in Part 1, Step 6\) into the bq-uploader project folder.
-
-#### **Step 4: Configure the Tool**
-
-Open the .env file in a simple text editor. You will see two lines:
-
-```plaintext
-BIGQUERY\_PROJECT\_ID="your-gcp-project-id"
-BIGQUERY\_DATASET\_ID="your\_bigquery\_dataset\_id"
-```
-
-- Replace "your-gcp-project-id" with the **Project ID** from your Google Cloud project.
-- Replace "your_bigquery_dataset_id" with the **Dataset ID** you created in Part 1, Step 3 (e.g., rudderstack_data).
-- Save and close the file.
-
-#### **Step 5: Install Dependencies**
-
-This step downloads the necessary code libraries for the server to run.
-
-- Open your computer's command prompt or terminal.
-- Navigate into the bq-uploader folder.
-- Type the following command and press Enter:  
-  npm install
-
-- Wait for the process to complete. You should see a new folder called node_modules appear.
-
-### **Part 3: Running the Uploader**
-
-Once the setup is complete, you can run the tool anytime you need to upload data.
-
-#### **Step 1: Start the Server**
-
-- In your command prompt or terminal, while inside the bq-uploader folder, run the following command:  
-  node server.js
-
-- You should see the message: Server running at http://localhost:3000. Leave this terminal window open.
-
-#### **Step 2: Open the Web Page**
-
-- Open your web browser (like Chrome or Firefox) and navigate to the following address:  
-  http://localhost:3000
-
-#### **Step 3: Upload Your Files**
-
-- You will see a simple form.
-- Click the "Choose File" button for each category (Identifies, Groups, Events) and select the corresponding CSV file from your computer.
-- Once all three files are selected, click the **🚀 Upload to BigQuery** button.
-
-The tool will now process and upload your data. You will see a status message on the page when it's complete. You can then go to your BigQuery console to see your newly populated tables\!
-
-### **Part 4: Merging Migrated Data with a Live RudderStack Database**
-
-After migrating your historical June.so data, you will likely set up a live RudderStack pipeline that sends new data to a different BigQuery dataset. This leaves you with two separate datasets: one with your old data and one with your new data.  
-The best practice for combining them for analysis is to create **VIEWs**. A view is a virtual, unified table that queries both your historical and live data in real-time without duplicating storage.
-
-#### **Step 1: Identify Your Datasets**
-
-You will have two datasets in your BigQuery project:
-
-- **Migration Dataset**: The one you created for this tool (e.g., rudderstack_data).
-- **Live RudderStack Dataset**: The one created by your live RudderStack pipeline (e.g., my_app_prod).
-
-#### **Step 2: Create a New Dataset for Views**
-
-It's a good practice to keep these combined views in a separate, dedicated dataset.
-
-- Create a new dataset in BigQuery named something like analytics_views.
-
-#### **Step 3: Create Combined Views Using SQL**
-
-In the BigQuery SQL workspace, run the following queries. **Remember to replace the placeholder project and dataset names with your own.**  
-**Example for the tracks table:**
-
-```sql
-CREATE OR REPLACE VIEW \`your-project-id.analytics\_views.tracks\` AS
-SELECT \* FROM \`your-project-id.my\_app\_prod.tracks\`
-UNION ALL
-SELECT \* FROM \`your-project-id.rudderstack\_data.tracks\`;
-```
-
-**Example for the users table:**
-
-```sql
-CREATE OR REPLACE VIEW \`your-project-id.analytics\_views.users\` AS
-SELECT \* FROM \`your-project-id.my\_app\_prod.users\`
-UNION ALL
-SELECT \* FROM \`your-project-id.rudderstack\_data.users\`;
-```
-
-**Example for a specific event table like open_modal:**
-
-```sql
-CREATE OR REPLACE VIEW \`your-project-id.analytics\_views.open\_modal\` AS
-SELECT \* FROM \`your-project-id.my\_app\_prod.open\_modal\`
-UNION ALL
-SELECT \* FROM \`your-project-id.rudderstack\_data.open\_modal\`;
-```
-
-**Repeat this CREATE OR REPLACE VIEW pattern for all tables you wish to combine**, such as identifies, pages, and \_groups.
-
-#### **Step 4: Use the Views for Analysis**
-
-Now, for all your analysis, dashboards (like Looker Studio), and queries, you can use the unified views in your analytics_views dataset. They will always contain the complete, combined history of your June.so and live RudderStack data.
+# **June.so to RudderStack/BigQuery Migration Guide**
+
+**Context:** The June.so founding team has been acquired by Amplitude, and the June.so product [will be shutting down on **August 8th, 2025**](https://www.june.so/blog/a-new-chapter). This gives you a limited time to export your valuable product analytics data before it's gone.
+
+This guide will walk you through using our simple migration tool to safely export all your historical data from June.so and import it into your own Google BigQuery database. The tool automatically formats your data to be 100% compatible with the RudderStack warehouse schema, giving you a perfect foundation to continue your product analytics journey without missing a beat.
+
+### **Why RudderStack and BigQuery?**
+
+Moving from a closed analytics platform like June.so is an opportunity to adopt a more flexible and powerful setup for the future. Here’s why using this tool to migrate to a RudderStack and BigQuery stack is a smart choice, especially for growth-stage companies:
+
+- **You Own Your Data**: Unlike with many analytics tools where your data is stored in their system, this process moves your data into your own Google BigQuery warehouse. It becomes your asset. You have complete control and can connect it to any tool you want in the future—BI platforms, other analytics tools, or even AI models—without ever being locked in again.
+- **It's Extremely Cost-Effective**: For early-growth companies, cost is critical. Google BigQuery has a very generous free tier and low-cost storage, meaning you can store years of historical data for just a few dollars a month. RudderStack also offers a free tier for event collection, making this combination one of the most affordable and scalable analytics stacks on the market. You get the power of an enterprise-grade data warehouse without the enterprise price tag.
+- **Connections and Unlimited Possibilities:** You can connect your product usage data from RudderStack/BigQuery data warehouse to other product analytics tools, such as Posthog. Moreover, you can make your own B2B SaaS dashboards over the BigQuery data using tools like [Looker Studio](https://lookerstudio.google.com) or [Apache SuperSet](https://superset.apache.org/).
+
+### **How It Works**
+
+This tool is designed with simplicity and security as top priorities. Here’s what happens when you use it:
+
+- **Everything Runs Locally**: The entire application (the server and the web page) runs on your own computer. Your data is processed locally and is never sent to any third-party servers.
+- **Direct and Secure Upload**: Your CSV files are read by the tool on your machine. When you click "Upload," the tool makes a direct, secure connection to your own Google BigQuery project using the credentials you provide.
+- **RudderStack Compatible**: The tool automatically reads your June.so data, and restructures it to match the RudderStack schema. It also creates the necessary tables in BigQuery for you.
+- **Instant Tracking Plan Generation**: As soon as you select a valid set of all three CSV files, the tool instantly generates a complete tracking plan on the right side of the screen. This gives you immediate insight into all the events and properties you've been tracking, without having to upload anything first.
+- **Generate Post-Migration SQL**: You can choose the "Dry Run" option to process your files locally and generate key outputs without uploading any data. This allows you to the SQL commands needed for the **post-migration step** of merging your historical data with a live production system.
+
+In short, your data goes from a file on your computer directly to your private BigQuery database. It doesn't go anywhere else.
+
+### **Part 1: Exporting Your Data from June.so**
+
+First, you need to get your data out of June.so. They have provided a CSV export feature for this purpose.
+
+1. Go to the June Migration Page: Open your web browser and navigate to the special migration URL provided by June:  
+   [https://analytics.june.so/a/go-to-my-workspace/migrate](https://analytics.june.so/a/go-to-my-workspace/migrate)
+2. **Stop Sending New Data**: To ensure your export is complete and accurate, you should stop sending any new tracking data to June from your application. In the migration page, you will see a checklist to confirm you have stopped sending track, page, identify, and group calls. Mark each one as "done".
+3. **Select the CSV Export Option**: Scroll down to the "Select a data export option" section. You will see two choices: "Amplitude" and "CSV". **Click on "CSV"**.
+4. **Start the Export**: Click the green "Export data" button. The process may take anywhere from a few minutes to a few hours, depending on the amount of data you have.
+5. **Receive Your Data via Email**: Once the export is complete, you will receive an email from system@june.so. This email will contain download links for three files:
+   - Events
+   - Identifies
+   - Groups
+6. **Download and Unzip the Files**: Click the links to download the files. They will likely be in a compressed .zst format.
+   - **On Windows**: You can use a free tool like [7-Zip](https://www.7-zip.org/) to extract them. Right-click the file and choose "Extract Here".
+   - **On macOS**: You may need to install a tool via the command line to unzip the files.
+   - Once unzipped, you will have three CSV files: events.csv, identifies.csv, and groups.csv. Keep these handy for the next part.
+
+### **Part 2: Setting Up Your New "Data Home" in Google BigQuery**
+
+This is a one-time setup to create a secure, private database in Google Cloud where your June.so data will be stored.
+
+1. **Create a Google Cloud Project**: If you don't already have one, create a free Google Cloud project. This is like your main account folder.
+   - **Official Guide**: [Creating and managing projects](https://cloud.google.com/resource-manager/docs/creating-managing-projects)
+2. **Enable the BigQuery API**: You need to "turn on" the BigQuery service for your project.
+   - **Instructions**: Go to the [BigQuery API page](https://console.cloud.google.com/apis/library/bigquery.googleapis.com) and click the **Enable** button.
+3. **Create a BigQuery Dataset**: A Dataset is like a folder inside your project where your data tables will live.
+   - **Official Guide**: [Create datasets](https://www.google.com/search?q=https://cloud.google.com/bigquery/docs/datasets%23create-dataset)
+   - When asked for a **Dataset ID**, we recommend using juneso_migration_data.
+4. **Create a Service Account**: This is a special, non-human user that our tool will use to securely upload data on your behalf.
+   - **Official Guide**: [Create service accounts](https://www.google.com/search?q=https://cloud.google.com/iam/docs/creating-managing-service-accounts%23creating)
+   - Give it a memorable name, like _june-migration-tool._
+5. **Grant Permissions**: Give your new Service Account the necessary permissions to work with BigQuery.
+   - **Official Guide**: [Granting roles](https://www.google.com/search?q=https://cloud.google.com/iam/docs/granting-changing-revoking-access%23grant-single-role)
+   - Assign the following two roles to the service account you just created:
+     1. BigQuery Data Editor
+     2. BigQuery Job User
+6. **Download Your JSON Key**: This is the password for the Service Account. Keep this file safe.
+   - **Official Guide**: [Creating service account keys](https://www.google.com/search?q=https://cloud.google.com/iam/docs/creating-managing-service-account-keys%23creating_service_account_keys)
+   - Choose **JSON** as the key type.
+   - A file will be downloaded. **Rename this file to credentials.json**.
+
+### **Part 3: Using the Migration Tool**
+
+Now you're ready to use the tool to move your data.
+
+1. **Download the Migration Tool**: Download the project files from the link below and unzip them into a folder on your computer.
+   - **Download Link (GitHub)**: [v1.0](https://github.com/ArvoanDev/juneso2rudderstack/releases/tag/1.0)
+2. **Install Node.js**: If you don't have it installed, download and install the **LTS** version from the [official Node.js website](https://nodejs.org/en/download/).
+3. **Set Up the Tool**:
+   - Move the credentials.json file (from Part 2, Step 6\) into the tool's folder.
+   - Open the .env file in a text editor.
+   - Replace your-gcp-project-id with your actual Google Cloud Project ID.
+   - Replace your_bigquery_dataset_id with the Dataset ID you created (e.g., juneso_migration_data).
+   - Open a command prompt or terminal, navigate into the tool's folder, and run the command: npm install
+4. **Run the Migration**:
+   - In the same command prompt/terminal, run the command: node server.js
+   - Open your web browser (e.g., Chrome) and go to: http://localhost:3000
+   - You will see the uploader interface. Select your identifies.csv, groups.csv, and events.csv files.
+   - Once all three valid files are selected, the "Upload to BigQuery" button will become active. Click it.
+   - The tool will now upload and format your data. This may take a few minutes.
+
+### **Part 4: Next Steps \- Merging June.so Data with Production Environment**
+
+After the upload is successful, the tool will display a set of SQL queries. These can be used to combine your historical June.so data with the new data you'll be collecting in your live RudderStack setup.
+
+1. **Set Up a Live RudderStack Pipeline**: In RudderStack, create a new BigQuery destination. This will be your _new_ live dataset (e.g., rudderstack_prod_data).
+2. **Use the Generated SQL**:  
+   **Important Note**: The SQL queries generated by the tool are powerful starting points. Because your live RudderStack environment may track different or additional properties than your old June.so setup, the table schemas might not match perfectly. The tool generates queries based only on the columns found in your June.so data. You may need to manually adjust the SELECT statements to add or remove columns to match your live production tables perfectly.
+   - Copy the queries from the **Views (Recommended)** tab in the tool.
+   - In the BigQuery SQL workspace, paste the queries.
+   - **Important**: Replace the placeholder your_live_rudderstack_dataset with the name of your new live dataset (e.g., rudderstack_prod_data).
+   - Run the queries.
+
+This creates a safe, virtual view of your data. Now, when you connect analytics tools to BigQuery, you can point them to the "views" dataset (e.g., analytics_views) to analyze both your historical June.so data and your new RudderStack data together as if they were in a single table.
