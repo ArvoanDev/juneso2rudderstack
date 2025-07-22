@@ -3,8 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <title>June.so to BigQuery Uploader</title>
+    <!-- For SQL syntax highlighting -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-light.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+
     <style>
-        /* --- Modern Theme --- */
         :root {
             --bg-color: #f4f7fe;
             --form-bg: #ffffff;
@@ -28,9 +31,7 @@
             display: flex;
             flex-direction: column;
             align-items: center;
-            justify-content: center;
-            min-height: 100vh;
-            margin: 0;
+            padding: 2rem;
             background-color: var(--bg-color);
             color: var(--text-color);
         }
@@ -63,10 +64,6 @@
         label {
             font-weight: 600;
             color: #2c3e50;
-        }
-
-        input[type="file"] {
-            color: #34495e;
         }
 
         input[type="file"]::file-selector-button {
@@ -111,12 +108,12 @@
         #status-message {
             margin-top: 1.5rem;
             font-weight: 500;
-            padding: 1rem;
+            padding: 1.5rem;
             border-radius: 8px;
             width: 100%;
-            max-width: 500px;
+            max-width: 800px; 
             box-sizing: border-box;
-            text-align: center;
+            text-align: left;
             opacity: 0;
             transition: opacity 0.3s ease;
         }
@@ -124,11 +121,79 @@
         #status-message:not(:empty) {
             opacity: 1;
         }
+        
+        #status-message pre {
+            background-color: #eef2ff;
+            padding: 1rem;
+            border-radius: 6px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-family: monospace;
+            font-size: 0.9rem;
+            margin-top: 1rem;
+            margin-bottom: 1rem;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        #status-message pre::-webkit-scrollbar { width: 8px; }
+        #status-message pre::-webkit-scrollbar-track { background: #e0e7ff; border-radius: 4px; }
+        #status-message pre::-webkit-scrollbar-thumb { background: #a5b4fc; border-radius: 4px; }
+        #status-message pre::-webkit-scrollbar-thumb:hover { background: #818cf8; }
+
+        #status-message h3 { margin-top: 0; color: var(--success-text); }
+        
+        .explainer {
+            font-size: 0.95rem;
+            line-height: 1.5;
+            background-color: #eef2ff;
+            padding: 1rem;
+            border-radius: 6px;
+            border-left: 4px solid var(--primary-start);
+            margin-bottom: 1.5rem;
+        }
+        .explainer code {
+            background-color: #d1d5db;
+            padding: 2px 5px;
+            border-radius: 4px;
+            font-family: monospace;
+        }
 
         .success { background-color: var(--success-bg); color: var(--success-text); }
         .error { background-color: var(--error-bg); color: var(--error-text); }
-        .info { background-color: var(--info-bg); color: var(--info-text); }
+        .info { background-color: var(--info-bg); color: var(--info-text); text-align: center; }
         .file-error-message { color: var(--error-text); font-size: 0.9rem; font-weight: 600; min-height: 1.2em; }
+
+        .sql-controls { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
+        .toggle-container { display: flex; background-color: #e9e9f0; border-radius: 8px; padding: 4px; }
+        .toggle-btn {
+            font-size: 0.9rem;
+            font-weight: 600;
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            background-color: transparent;
+            color: #555;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .toggle-btn.active {
+            background: linear-gradient(90deg, var(--primary-start) 0%, var(--primary-end) 100%);
+            color: white;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .copy-btn { padding: 8px 16px; font-size: 0.9rem; background: #fff; color: var(--primary-start); border: 2px solid var(--primary-start); }
+
+        /* --- NEW: Dry Run Checkbox Styles --- */
+        .dry-run-container {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-top: 0.5rem;
+        }
+        .dry-run-container label {
+            cursor: pointer;
+            font-weight: 500;
+        }
     </style>
 </head>
 <body>
@@ -139,17 +204,20 @@
             <input type="file" id="identifies" name="identifies" accept=".csv" required>
             <small id="identifies-error" class="file-error-message"></small>
         </div>
-
         <div class="file-input-group">
             <label for="groups">Groups CSV:</label>
             <input type="file" id="groups" name="groups" accept=".csv" required>
             <small id="groups-error" class="file-error-message"></small>
         </div>
-
         <div class="file-input-group">
             <label for="events">Events CSV:</label>
             <input type="file" id="events" name="events" accept=".csv" required>
             <small id="events-error" class="file-error-message"></small>
+        </div>
+
+        <div class="dry-run-container">
+            <input type="checkbox" id="dry-run" name="dryRun">
+            <label for="dry-run">Dry Run (only generate SQL queries)</label>
         </div>
 
         <button type="submit" id="submit-button" disabled>🚀 Upload to BigQuery</button>
@@ -161,6 +229,7 @@
         const form = document.getElementById('upload-form');
         const statusMessage = document.getElementById('status-message');
         const submitButton = document.getElementById('submit-button');
+        const dryRunCheckbox = document.getElementById('dry-run');
 
         const inputs = {
             identifies: document.getElementById('identifies'),
@@ -168,120 +237,129 @@
             events: document.getElementById('events')
         };
 
-        const validationStatus = {
-            identifies: false,
-            groups: false,
-            events: false
-        };
+        const validationStatus = { identifies: false, groups: false, events: false };
+        let sqlData = {};
 
         const VALIDATION_RULES = {
-            identifies: {
-                required: ['user_id', 'traits'],
-                forbidden: ['group_id', 'properties']
-            },
-            groups: {
-                required: ['group_id', 'traits'],
-                forbidden: ['properties']
-            },
-            events: {
-                required: ['type', 'properties'],
-                forbidden: ['group_id', 'traits']
-            }
+            identifies: { required: ['user_id', 'traits'], forbidden: ['group_id', 'properties'] },
+            groups: { required: ['group_id', 'traits'], forbidden: ['properties'] },
+            events: { required: ['type', 'properties'], forbidden: ['group_id', 'traits'] }
         };
 
         function getFileHeader(file) {
             return new Promise((resolve, reject) => {
                 const reader = new FileReader();
-                reader.onload = (event) => {
-                    const text = event.target.result;
-                    const firstLine = text.split('\n')[0].trim();
-                    const headers = firstLine.split(',').map(h => h.replace(/"/g, ''));
-                    resolve(headers);
-                };
-                reader.onerror = (event) => reject(new Error("Error reading file: " + event.target.error.name));
+                reader.onload = (e) => resolve(e.target.result.split('\n')[0].trim().split(',').map(h => h.replace(/"/g, '')));
+                reader.onerror = (e) => reject(new Error("Error reading file: " + e.target.error.name));
                 reader.readAsText(file.slice(0, 1024));
             });
         }
 
         async function validateFile(file, fileType) {
-            if (!file) {
-                throw new Error(`Please select a file.`);
-            }
+            if (!file) throw new Error(`Please select a file.`);
             const headers = await getFileHeader(file);
             const rules = VALIDATION_RULES[fileType];
-            
-            for (const col of rules.required) {
-                if (!headers.includes(col)) {
-                    throw new Error(`Invalid file. Header is missing required column: '${col}'.`);
-                }
-            }
-
-            for (const col of rules.forbidden) {
-                if (headers.includes(col)) {
-                    throw new Error(`Wrong file type. Looks like an '${Object.keys(VALIDATION_RULES).find(key => VALIDATION_RULES[key].required.includes(col))}.csv'.`);
-                }
-            }
+            for (const col of rules.required) if (!headers.includes(col)) throw new Error(`Invalid file. Header missing: '${col}'.`);
+            for (const col of rules.forbidden) if (headers.includes(col)) throw new Error(`Wrong file type. Looks like an '${Object.keys(VALIDATION_RULES).find(key => VALIDATION_RULES[key].required.includes(col))}.csv'.`);
         }
 
         function checkAllFilesValid() {
-            const allValid = Object.values(validationStatus).every(status => status === true);
-            submitButton.disabled = !allValid;
+            submitButton.disabled = !Object.values(validationStatus).every(s => s === true);
         }
 
         async function handleFileValidation(event) {
-            const input = event.target;
-            const fileType = input.name;
+            const { name: fileType, files } = event.target;
             const errorElement = document.getElementById(`${fileType}-error`);
-            const file = input.files[0];
-
             errorElement.textContent = '';
             statusMessage.textContent = '';
             statusMessage.className = '';
             validationStatus[fileType] = false;
-
-            if (!file) {
-                checkAllFilesValid();
-                return;
-            }
-
+            if (!files[0]) { checkAllFilesValid(); return; }
             try {
-                await validateFile(file, fileType);
+                await validateFile(files[0], fileType);
                 validationStatus[fileType] = true;
-                console.log(`Validation passed for ${fileType}.csv`);
             } catch (error) {
                 errorElement.textContent = `Error: ${error.message}`;
-                console.error(`Validation failed for ${fileType}:`, error);
             } finally {
                 checkAllFilesValid();
             }
         }
 
-        Object.values(inputs).forEach(input => {
-            input.addEventListener('change', handleFileValidation);
+        Object.values(inputs).forEach(input => input.addEventListener('change', handleFileValidation));
+
+        // Update button text based on dry run checkbox
+        dryRunCheckbox.addEventListener('change', () => {
+            if (dryRunCheckbox.checked) {
+                submitButton.innerHTML = '🚀 Get SQL Queries';
+            } else {
+                submitButton.innerHTML = '🚀 Upload to BigQuery';
+            }
         });
+
+        function displaySql(queryType) {
+            const header = queryType === 'view' ? sqlData.viewHeader : sqlData.mergeHeader;
+            const queries = queryType === 'view' ? sqlData.viewQueries : sqlData.mergeQueries;
+            const fullSql = header + '\n\n' + queries.map(item => item.query).join('\n\n');
+            const codeBlock = document.getElementById('sql-code-block');
+            
+            const highlightedCode = hljs.highlight(fullSql, { language: 'sql' }).value;
+            codeBlock.innerHTML = highlightedCode;
+
+            document.getElementById('view-btn').classList.toggle('active', queryType === 'view');
+            document.getElementById('merge-btn').classList.toggle('active', queryType === 'merge');
+        }
+
+        function copySqlToClipboard() {
+            const codeBlock = document.getElementById('sql-code-block');
+            navigator.clipboard.writeText(codeBlock.textContent).then(() => {
+                const copyButton = document.getElementById('copy-btn');
+                const originalText = copyButton.textContent;
+                copyButton.textContent = 'Copied!';
+                setTimeout(() => { copyButton.textContent = originalText; }, 2000);
+            });
+        }
 
         form.addEventListener('submit', async (event) => {
             event.preventDefault();
-            
             submitButton.disabled = true;
-            statusMessage.textContent = 'Uploading...';
+            statusMessage.innerHTML = '';
+            statusMessage.textContent = dryRunCheckbox.checked ? 'Generating SQL...' : 'Uploading...';
             statusMessage.className = 'info';
 
             try {
                 const formData = new FormData(form);
-                const response = await fetch('/upload', {
-                    method: 'POST',
-                    body: formData,
-                });
+                // The checkbox value is automatically included in formData
+                const response = await fetch('/upload', { method: 'POST', body: formData });
+                if (!response.ok) throw new Error(await response.text() || `HTTP error! Status: ${response.status}`);
+                
+                sqlData = await response.json();
+                
+                const resultHtml = `
+                    <h3>${sqlData.message}</h3>
+                    <div class="explainer">
+                        <strong>Next Steps:</strong> The queries below are for merging your historical data. 
+                        You must replace <code>your_live_rudderstack_dataset</code> with the name of your actual production dataset in BigQuery. 
+                        Then, run the queries from one of the tabs in your BigQuery SQL workspace.
+                    </div>
+                    <div class="sql-controls">
+                        <div class="toggle-container">
+                            <button id="view-btn" class="toggle-btn">Views (Recommended)</button>
+                            <button id="merge-btn" class="toggle-btn">Merge (Destructive)</button>
+                        </div>
+                        <button id="copy-btn" class="copy-btn">Copy SQL</button>
+                    </div>
+                    <pre><code id="sql-code-block" class="language-sql"></code></pre>
+                `;
 
-                const responseText = await response.text();
-
-                if (!response.ok) {
-                    throw new Error(responseText || `HTTP error! Status: ${response.status}`);
-                }
-
-                statusMessage.textContent = responseText;
+                statusMessage.innerHTML = resultHtml;
                 statusMessage.className = 'success';
+                
+                displaySql('view');
+                
+                document.getElementById('view-btn').addEventListener('click', () => displaySql('view'));
+                document.getElementById('merge-btn').addEventListener('click', () => displaySql('merge'));
+                document.getElementById('copy-btn').addEventListener('click', copySqlToClipboard);
+
                 form.reset();
                 Object.keys(validationStatus).forEach(key => validationStatus[key] = false);
                 checkAllFilesValid();
@@ -289,7 +367,6 @@
             } catch (error) {
                 statusMessage.textContent = `Error: ${error.message}`;
                 statusMessage.className = 'error';
-                console.error('Upload failed:', error);
                 submitButton.disabled = false;
             }
         });
