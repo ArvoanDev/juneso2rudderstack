@@ -143,9 +143,10 @@ async function manageSchemaAndInsert(tableId, baseSchema, rows, dynamicPropertyK
             group_id: row.group_id,
         };
         
-        // **THE FIX**: For the 'users' table, the 'id' column should be the 'user_id'.
         if (tableId === 'users') {
             finalRow.id = row.user_id;
+            // **THE FIX**: Remove the user_id field as it's not part of the users table schema.
+            delete finalRow.user_id;
         }
 
         if (baseSchema === TRACKS_SCHEMA) {
