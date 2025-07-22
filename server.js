@@ -55,41 +55,57 @@ function inferBigQueryType(value) {
 
 // --- SQL Query Generation ---
 
-function generateSqlQueries(tableNames) {
+async function getTableSchema(table) {
+    try {
+        const [metadata] = await table.getMetadata();
+        return metadata.schema.fields || [];
+    } catch (e) {
+        if (e.code !== 404) throw e;
+        console.warn(`Table ${table.id} not found for schema generation.`);
+        return [];
+    }
+}
+
+async function generateSqlQueries(tableNames) {
     const projectId = process.env.BIGQUERY_PROJECT_ID;
-    const migrationDataset = process.env.BIGQUERY_DATASET_ID;
-    const liveDataset = 'your_live_rudderstack_dataset'; // Placeholder
-    const viewsDataset = 'analytics_views'; // Placeholder
+    const migrationDatasetId = process.env.BIGQUERY_DATASET_ID;
+    const liveDatasetId = 'your_live_rudderstack_dataset';
+    const viewsDatasetId = 'analytics_views';
 
     const viewQueries = [];
     const mergeQueries = [];
 
     const viewHeader = `-- =====================================================================================
 -- Non-Destructive VIEW Queries (Recommended)
--- These create a virtual layer for analysis without moving or duplicating data.
--- Run these queries in a new dataset (e.g., '${viewsDataset}').
 -- =====================================================================================`;
-
     const mergeHeader = `-- =====================================================================================
 -- Destructive MERGE (Upsert) Queries
--- These physically copy data from the migration dataset to your live dataset.
--- Use with caution. Back up your live tables before running.
 -- =====================================================================================`;
 
     for (const table of tableNames) {
+        const migrationTable = bigquery.dataset(migrationDatasetId).table(table);
+        const migrationSchema = await getTableSchema(migrationTable);
+        const allColumnNames = migrationSchema.map(f => f.name);
+
+        if (allColumnNames.length === 0) continue;
+
+        const columns = allColumnNames.map(c => `  ${c}`).join(',\n');
+
         const viewSql = `-- For table: ${table}\n` +
-        `CREATE OR REPLACE VIEW \`${projectId}.${viewsDataset}.${table}\` AS\n` +
-        `SELECT * FROM \`${projectId}.${liveDataset}.${table}\`\n` +
-        `UNION ALL\n` +
-        `SELECT * FROM \`${projectId}.${migrationDataset}.${table}\`;`;
+            `-- Note: This query assumes your live table has the same columns. \n-- You may need to add CAST(NULL AS TYPE) for columns that only exist in the migrated data.\n` +
+            `CREATE OR REPLACE VIEW \`${projectId}.${viewsDatasetId}.${table}\` AS\n` +
+            `SELECT\n${columns}\nFROM \`${projectId}.${liveDatasetId}.${table}\`\n` +
+            `UNION ALL\n` +
+            `SELECT\n${columns}\nFROM \`${projectId}.${migrationDatasetId}.${table}\`;`;
         viewQueries.push({ table, query: viewSql });
 
         const mergeSql = `-- For table: ${table}\n` +
-        `MERGE \`${projectId}.${liveDataset}.${table}\` T\n` +
-        `USING \`${projectId}.${migrationDataset}.${table}\` S\n` +
-        `ON T.id = S.id\n` +
-        `WHEN NOT MATCHED BY TARGET THEN\n` +
-        `  INSERT ROW;`;
+            `MERGE \`${projectId}.${liveDatasetId}.${table}\` T\n` +
+            `USING \`${projectId}.${migrationDatasetId}.${table}\` S\n` +
+            `ON T.id = S.id\n` +
+            `WHEN NOT MATCHED BY TARGET THEN\n` +
+            `  INSERT (${allColumnNames.join(', ')})\n` +
+            `  VALUES (${allColumnNames.join(', ')});`;
         mergeQueries.push({ table, query: mergeSql });
     }
 
@@ -101,6 +117,7 @@ function generateSqlQueries(tableNames) {
         mergeQueries
     };
 }
+
 
 // --- Core BigQuery Logic ---
 
@@ -114,11 +131,22 @@ async function manageSchemaAndInsert(tableId, baseSchema, rows, dynamicPropertyK
         const context = JSON.parse(row.context || '{}');
         
         const finalRow = {
-            id: row.message_id, anonymous_id: row.anonymous_id, user_id: row.user_id,
-            received_at: row.received_at, sent_at: row.sent_at, timestamp: row.timestamp,
-            original_timestamp: row.original_timestamp, channel: row.channel, version: row.version,
+            id: row.message_id,
+            anonymous_id: row.anonymous_id,
+            user_id: row.user_id,
+            received_at: row.received_at,
+            sent_at: row.sent_at,
+            timestamp: row.timestamp,
+            original_timestamp: row.original_timestamp,
+            channel: row.channel,
+            version: row.version,
             group_id: row.group_id,
         };
+        
+        // **THE FIX**: For the 'users' table, the 'id' column should be the 'user_id'.
+        if (tableId === 'users') {
+            finalRow.id = row.user_id;
+        }
 
         if (baseSchema === TRACKS_SCHEMA) {
             finalRow.event = sanitizeTableName(row.name);
@@ -261,7 +289,7 @@ app.post('/upload', upload.fields([
         }
 
         console.log("\n--- Process Completed Successfully ---\n");
-        const sqlQueries = generateSqlQueries(processedTables);
+        const sqlQueries = await generateSqlQueries(processedTables);
         res.status(200).json(sqlQueries);
     } catch (error) {
         console.error("\n--- An error occurred during the upload process ---");

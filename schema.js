@@ -1,7 +1,5 @@
-// schema.js
-
-// Defines the universal base columns present in all RudderStack tables,
-// including flattened context fields.
+// Defines the universal base columns for most tables.
+// All context fields will be added dynamically.
 const BASE_SCHEMA = [
     { name: 'id', type: 'STRING' },
     { name: 'anonymous_id', type: 'STRING' },
@@ -15,12 +13,18 @@ const BASE_SCHEMA = [
     { name: 'uuid_ts', type: 'TIMESTAMP' },
 ];
 
-// Specific schemas only add fields that are not part of traits or properties
+// Specific schemas now reference the appropriate base schema.
 const IDENTIFIES_SCHEMA = [...BASE_SCHEMA];
 const GROUPS_SCHEMA = [...BASE_SCHEMA, { name: 'group_id', type: 'STRING' }];
 const PAGES_SCHEMA = [...BASE_SCHEMA, { name: 'name', type: 'STRING' }];
 const TRACKS_SCHEMA = [...BASE_SCHEMA, { name: 'event', type: 'STRING' }, { name: 'event_text', type: 'STRING' }];
-const USERS_SCHEMA = [{ name: 'user_id', type: 'STRING' }];
+
+// The users table schema only contains the essential, non-dynamic fields.
+// Context and traits will be added dynamically.
+const USERS_SCHEMA = [
+    { name: 'id', type: 'STRING' },
+    { name: 'received_at', type: 'TIMESTAMP' },
+];
 
 module.exports = {
     IDENTIFIES_SCHEMA,
