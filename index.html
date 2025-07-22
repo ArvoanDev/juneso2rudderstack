@@ -142,7 +142,6 @@
 
         #status-message h3 { margin-top: 0; color: var(--success-text); }
         
-        /* --- NEW: Explainer Styles --- */
         .explainer {
             font-size: 0.95rem;
             line-height: 1.5;
@@ -183,6 +182,18 @@
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
         .copy-btn { padding: 8px 16px; font-size: 0.9rem; background: #fff; color: var(--primary-start); border: 2px solid var(--primary-start); }
+
+        /* --- NEW: Dry Run Checkbox Styles --- */
+        .dry-run-container {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-top: 0.5rem;
+        }
+        .dry-run-container label {
+            cursor: pointer;
+            font-weight: 500;
+        }
     </style>
 </head>
 <body>
@@ -203,6 +214,12 @@
             <input type="file" id="events" name="events" accept=".csv" required>
             <small id="events-error" class="file-error-message"></small>
         </div>
+
+        <div class="dry-run-container">
+            <input type="checkbox" id="dry-run" name="dryRun">
+            <label for="dry-run">Dry Run (only generate SQL queries)</label>
+        </div>
+
         <button type="submit" id="submit-button" disabled>🚀 Upload to BigQuery</button>
     </form>
     
@@ -212,6 +229,7 @@
         const form = document.getElementById('upload-form');
         const statusMessage = document.getElementById('status-message');
         const submitButton = document.getElementById('submit-button');
+        const dryRunCheckbox = document.getElementById('dry-run');
 
         const inputs = {
             identifies: document.getElementById('identifies'),
@@ -269,6 +287,15 @@
 
         Object.values(inputs).forEach(input => input.addEventListener('change', handleFileValidation));
 
+        // Update button text based on dry run checkbox
+        dryRunCheckbox.addEventListener('change', () => {
+            if (dryRunCheckbox.checked) {
+                submitButton.innerHTML = '🚀 Get SQL Queries';
+            } else {
+                submitButton.innerHTML = '🚀 Upload to BigQuery';
+            }
+        });
+
         function displaySql(queryType) {
             const header = queryType === 'view' ? sqlData.viewHeader : sqlData.mergeHeader;
             const queries = queryType === 'view' ? sqlData.viewQueries : sqlData.mergeQueries;
@@ -296,11 +323,12 @@
             event.preventDefault();
             submitButton.disabled = true;
             statusMessage.innerHTML = '';
-            statusMessage.textContent = 'Uploading...';
+            statusMessage.textContent = dryRunCheckbox.checked ? 'Generating SQL...' : 'Uploading...';
             statusMessage.className = 'info';
 
             try {
                 const formData = new FormData(form);
+                // The checkbox value is automatically included in formData
                 const response = await fetch('/upload', { method: 'POST', body: formData });
                 if (!response.ok) throw new Error(await response.text() || `HTTP error! Status: ${response.status}`);
                 

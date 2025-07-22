@@ -31,7 +31,6 @@ const sanitizeTableName = (name) => {
     return cleaned || 'unknown_event';
 };
 
-
 function flattenObject(obj, prefix = '') {
     const result = {};
     if (!obj || typeof obj !== 'object') return result;
@@ -52,136 +51,6 @@ function inferBigQueryType(value) {
     if (typeof value === 'number') return Number.isInteger(value) ? 'INT64' : 'FLOAT64';
     if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value)) return 'TIMESTAMP';
     return 'STRING';
-}
-
-// --- Core BigQuery Logic ---
-
-async function manageSchemaAndInsert(tableId, baseSchema, rows, dynamicPropertyKey, processedTablesSet) {
-    processedTablesSet.add(tableId); // Track that this table has been processed
-    if (rows.length === 0) return;
-    let table = bigquery.dataset(datasetId).table(tableId);
-
-    const flattenedRows = rows.map(row => {
-        const dynamicData = JSON.parse(row[dynamicPropertyKey] || '{}');
-        const context = JSON.parse(row.context || '{}');
-        
-        const finalRow = {
-            id: row.message_id, anonymous_id: row.anonymous_id, user_id: row.user_id,
-            received_at: row.received_at, sent_at: row.sent_at, timestamp: row.timestamp,
-            original_timestamp: row.original_timestamp, channel: row.channel, version: row.version,
-            group_id: row.group_id,
-        };
-
-        if (baseSchema === TRACKS_SCHEMA) {
-            finalRow.event = sanitizeTableName(row.name);
-            finalRow.event_text = row.name;
-        }
-
-        Object.assign(finalRow, flattenObject(context, 'context'));
-        Object.assign(finalRow, flattenObject(dynamicData));
-
-        Object.keys(finalRow).forEach(key => finalRow[key] === undefined && delete finalRow[key]);
-        return finalRow;
-    });
-
-    const discoveredFields = new Map();
-    flattenedRows.forEach(row => {
-        for (const [key, value] of Object.entries(row)) {
-            const type = inferBigQueryType(value);
-            if (!discoveredFields.has(key) || (discoveredFields.get(key) !== 'STRING' && type === 'STRING')) {
-               discoveredFields.set(key, type);
-            }
-        }
-    });
-    
-    baseSchema.forEach(field => discoveredFields.set(field.name, field.type));
-    
-    const finalSchema = Array.from(discoveredFields, ([name, type]) => ({ name, type }));
-
-    const [exists] = await table.exists();
-    if (!exists) {
-        console.log(`[${tableId}] Table not found. Creating with complete schema...`);
-        const [createdTable] = await bigquery.dataset(datasetId).createTable(tableId, { schema: finalSchema });
-        console.log(`[${tableId}] createTable operation completed.`);
-        table = createdTable;
-    } else {
-        const [metadata] = await table.getMetadata();
-        const existingFields = new Set(metadata.schema.fields.map(f => f.name));
-        const fieldsToAdd = finalSchema.filter(field => !existingFields.has(field.name));
-        if (fieldsToAdd.length > 0) {
-            console.log(`[${tableId}] Evolving schema, adding: ${fieldsToAdd.map(f=>f.name).join(', ')}`);
-            metadata.schema.fields.push(...fieldsToAdd);
-            await table.setMetadata(metadata);
-        }
-    }
-    
-    let attempts = 0;
-    const maxAttempts = 5;
-    const delay = 2000;
-
-    while (attempts < maxAttempts) {
-        try {
-            console.log(`[${tableId}] Attempting to insert ${flattenedRows.length} rows (Attempt ${attempts + 1})...`);
-            await table.insert(flattenedRows);
-            console.log(`[${tableId}] Successfully inserted ${flattenedRows.length} rows.`);
-            return;
-        } catch (err) {
-            if (err.code === 404 && attempts < maxAttempts - 1) {
-                attempts++;
-                console.warn(`[${tableId}] Insert failed because table was not found. Retrying in ${delay * attempts / 1000}s...`);
-                await new Promise(resolve => setTimeout(resolve, delay * attempts));
-            } else {
-                console.error(`\n--- BigQuery Insert Error in table: ${tableId} ---`);
-                console.error("Full error object:", JSON.stringify(err, null, 2));
-                console.error("--- End of Error Details ---\n");
-                throw err;
-            }
-        }
-    }
-}
-
-// --- File Processors ---
-
-function parseCsvToRows(file) {
-    return new Promise((resolve, reject) => {
-        const rows = [];
-        const bufferStream = new stream.PassThrough();
-        bufferStream.end(file.buffer);
-        bufferStream.pipe(csv()).on('data', row => rows.push(row)).on('end', () => resolve(rows)).on('error', reject);
-    });
-}
-
-async function processIdentifiesFile(file, processedTablesSet) {
-    const rows = await parseCsvToRows(file);
-    await manageSchemaAndInsert('identifies', IDENTIFIES_SCHEMA, rows, 'traits', processedTablesSet);
-    await manageSchemaAndInsert('users', USERS_SCHEMA, rows, 'traits', processedTablesSet);
-}
-
-async function processGroupsFile(file, processedTablesSet) {
-    const rows = await parseCsvToRows(file);
-    await manageSchemaAndInsert('_groups', GROUPS_SCHEMA, rows, 'traits', processedTablesSet);
-}
-
-async function processEventsFile(file, processedTablesSet) {
-    const allEvents = await parseCsvToRows(file);
-    const pageRows = allEvents.filter(row => row.type === '0');
-    const trackRows = allEvents.filter(row => row.type === '2');
-
-    // Process main tables
-    await manageSchemaAndInsert('pages', PAGES_SCHEMA, pageRows, 'properties', processedTablesSet);
-    await manageSchemaAndInsert('tracks', TRACKS_SCHEMA, trackRows, 'properties', processedTablesSet);
-
-    // Process track-specific tables
-    const tracksByName = trackRows.reduce((acc, event) => {
-        const tableName = sanitizeTableName(event.name);
-        if (!acc[tableName]) acc[tableName] = [];
-        acc[tableName].push(event);
-        return acc;
-    }, {});
-
-    for (const [tableId, rows] of Object.entries(tracksByName)) {
-        await manageSchemaAndInsert(tableId, TRACKS_SCHEMA, rows, 'properties', processedTablesSet);
-    }
 }
 
 // --- SQL Query Generation ---
@@ -225,7 +94,7 @@ function generateSqlQueries(tableNames) {
     }
 
     return {
-        message: `Upload successful! Here are the SQL queries to merge your migrated data. Replace 'your_live_rudderstack_dataset' with the name of your actual production dataset.`,
+        message: `SQL Generation successful! Here are the queries to merge your data.`,
         viewHeader,
         mergeHeader,
         viewQueries,
@@ -233,31 +102,165 @@ function generateSqlQueries(tableNames) {
     };
 }
 
+// --- Core BigQuery Logic ---
+
+async function manageSchemaAndInsert(tableId, baseSchema, rows, dynamicPropertyKey, processedTablesSet) {
+    processedTablesSet.add(tableId);
+    if (rows.length === 0) return;
+    let table = bigquery.dataset(datasetId).table(tableId);
+
+    const flattenedRows = rows.map(row => {
+        const dynamicData = JSON.parse(row[dynamicPropertyKey] || '{}');
+        const context = JSON.parse(row.context || '{}');
+        
+        const finalRow = {
+            id: row.message_id, anonymous_id: row.anonymous_id, user_id: row.user_id,
+            received_at: row.received_at, sent_at: row.sent_at, timestamp: row.timestamp,
+            original_timestamp: row.original_timestamp, channel: row.channel, version: row.version,
+            group_id: row.group_id,
+        };
+
+        if (baseSchema === TRACKS_SCHEMA) {
+            finalRow.event = sanitizeTableName(row.name);
+            finalRow.event_text = row.name;
+        }
+
+        Object.assign(finalRow, flattenObject(context, 'context'));
+        Object.assign(finalRow, flattenObject(dynamicData));
+
+        Object.keys(finalRow).forEach(key => finalRow[key] === undefined && delete finalRow[key]);
+        return finalRow;
+    });
+
+    const discoveredFields = new Map();
+    flattenedRows.forEach(row => {
+        for (const [key, value] of Object.entries(row)) {
+            const type = inferBigQueryType(value);
+            if (!discoveredFields.has(key) || (discoveredFields.get(key) !== 'STRING' && type === 'STRING')) {
+               discoveredFields.set(key, type);
+            }
+        }
+    });
+    
+    baseSchema.forEach(field => discoveredFields.set(field.name, field.type));
+    const finalSchema = Array.from(discoveredFields, ([name, type]) => ({ name, type }));
+
+    const [exists] = await table.exists();
+    if (!exists) {
+        console.log(`[${tableId}] Table not found. Creating...`);
+        [table] = await bigquery.dataset(datasetId).createTable(tableId, { schema: finalSchema });
+    } else {
+        const [metadata] = await table.getMetadata();
+        const existingFields = new Set(metadata.schema.fields.map(f => f.name));
+        const fieldsToAdd = finalSchema.filter(field => !existingFields.has(field.name));
+        if (fieldsToAdd.length > 0) {
+            console.log(`[${tableId}] Evolving schema, adding: ${fieldsToAdd.map(f=>f.name).join(', ')}`);
+            metadata.schema.fields.push(...fieldsToAdd);
+            await table.setMetadata(metadata);
+        }
+    }
+    
+    let attempts = 0;
+    const maxAttempts = 5;
+    const delay = 2000;
+    while (attempts < maxAttempts) {
+        try {
+            console.log(`[${tableId}] Attempting to insert ${flattenedRows.length} rows (Attempt ${attempts + 1})...`);
+            await table.insert(flattenedRows);
+            console.log(`[${tableId}] Successfully inserted ${flattenedRows.length} rows.`);
+            return;
+        } catch (err) {
+            if (err.code === 404 && attempts < maxAttempts - 1) {
+                attempts++;
+                console.warn(`[${tableId}] Insert failed, retrying in ${delay * attempts / 1000}s...`);
+                await new Promise(resolve => setTimeout(resolve, delay * attempts));
+            } else {
+                console.error(`\n--- BigQuery Insert Error in table: ${tableId} ---`);
+                console.error("Full error object:", JSON.stringify(err, null, 2));
+                throw err;
+            }
+        }
+    }
+}
+
+// --- File Processors ---
+
+function parseCsvToRows(file) {
+    return new Promise((resolve, reject) => {
+        const rows = [];
+        const bufferStream = new stream.PassThrough();
+        bufferStream.end(file.buffer);
+        bufferStream.pipe(csv()).on('data', row => rows.push(row)).on('end', () => resolve(rows)).on('error', reject);
+    });
+}
+
+async function processFile(file, type, processedTablesSet, isDryRun) {
+    const rows = await parseCsvToRows(file);
+    switch (type) {
+        case 'identifies':
+            processedTablesSet.add('identifies').add('users');
+            if (!isDryRun) {
+                await manageSchemaAndInsert('identifies', IDENTIFIES_SCHEMA, rows, 'traits', processedTablesSet);
+                await manageSchemaAndInsert('users', USERS_SCHEMA, rows, 'traits', processedTablesSet);
+            }
+            break;
+        case 'groups':
+            processedTablesSet.add('_groups');
+            if (!isDryRun) {
+                await manageSchemaAndInsert('_groups', GROUPS_SCHEMA, rows, 'traits', processedTablesSet);
+            }
+            break;
+        case 'events':
+            const pageRows = rows.filter(row => row.type === '0');
+            const trackRows = rows.filter(row => row.type === '2');
+            if (pageRows.length > 0) processedTablesSet.add('pages');
+            if (trackRows.length > 0) processedTablesSet.add('tracks');
+            
+            const tracksByName = trackRows.reduce((acc, event) => {
+                const tableName = sanitizeTableName(event.name);
+                processedTablesSet.add(tableName);
+                if (!acc[tableName]) acc[tableName] = [];
+                acc[tableName].push(event);
+                return acc;
+            }, {});
+
+            if (!isDryRun) {
+                await manageSchemaAndInsert('pages', PAGES_SCHEMA, pageRows, 'properties', processedTablesSet);
+                await manageSchemaAndInsert('tracks', TRACKS_SCHEMA, trackRows, 'properties', processedTablesSet);
+                for (const [tableId, tableRows] of Object.entries(tracksByName)) {
+                    await manageSchemaAndInsert(tableId, TRACKS_SCHEMA, tableRows, 'properties', processedTablesSet);
+                }
+            }
+            break;
+    }
+}
+
 // --- Express Routes ---
 app.post('/upload', upload.fields([
-    { name: 'identifies', maxCount: 1 }, { name: 'groups', maxCount: 1 }, { name: 'events', maxCount: 1 },
+    { name: 'identifies', maxCount: 1 }, { name: 'groups', maxCount: 1 }, { name: 'events', maxCount: 1 }, { name: 'dryRun' }
 ]), async (req, res) => {
     if (!req.files) return res.status(400).send('No files were uploaded.');
     
+    const isDryRun = req.body.dryRun === 'true';
     const processedTables = new Set();
 
     try {
-        console.log("\n--- Starting New Upload Process ---");
+        console.log(`\n--- Starting New Upload Process (Dry Run: ${isDryRun}) ---`);
 
         if (req.files.identifies) {
             console.log("\n[Main] Processing identifies file...");
-            await processIdentifiesFile(req.files.identifies[0], processedTables);
+            await processFile(req.files.identifies[0], 'identifies', processedTables, isDryRun);
         }
         if (req.files.groups) {
             console.log("\n[Main] Processing groups file...");
-            await processGroupsFile(req.files.groups[0], processedTables);
+            await processFile(req.files.groups[0], 'groups', processedTables, isDryRun);
         }
         if (req.files.events) {
             console.log("\n[Main] Processing events file...");
-            await processEventsFile(req.files.events[0], processedTables);
+            await processFile(req.files.events[0], 'events', processedTables, isDryRun);
         }
 
-        console.log("\n--- Upload Process Completed Successfully ---\n");
+        console.log("\n--- Process Completed Successfully ---\n");
         const sqlQueries = generateSqlQueries(processedTables);
         res.status(200).json(sqlQueries);
     } catch (error) {
