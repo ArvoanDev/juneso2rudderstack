@@ -26,7 +26,7 @@ In short, your data goes from a file on your computer directly to your private B
 
 ### **Part 1: Exporting Your Data from June.so**
 
-First, you need to get your data out of June.so. They have provided a CSV export feature for this purpose.
+First, you need to get your data out of June.so. They have provided a CSV export feature for this purpose. The original June.so documentation is available [here](https://help.june.so/en/articles/11696025-how-to-export-your-data).
 
 1. Go to the June Migration Page: Open your web browser and navigate to the special migration URL provided by June:  
    [https://analytics.june.so/a/go-to-my-workspace/migrate](https://analytics.june.so/a/go-to-my-workspace/migrate)
