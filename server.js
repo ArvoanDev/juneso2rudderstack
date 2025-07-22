@@ -53,6 +53,59 @@ function inferBigQueryType(value) {
     return 'STRING';
 }
 
+// --- NEW: Tracking Plan Generation ---
+function generateTrackingPlan(identifiesRows, groupsRows, eventsRows) {
+    const plan = [];
+
+    // Process Identifies
+    const identifyProperties = new Set();
+    identifiesRows.forEach(row => {
+        const traits = JSON.parse(row.traits || '{}');
+        Object.keys(flattenObject(traits)).forEach(prop => identifyProperties.add(prop));
+    });
+    if (identifiesRows.length > 0) {
+        plan.push({ ruleType: 'identify', ruleName: 'Identify', properties: Array.from(identifyProperties).sort() });
+    }
+
+    // Process Groups
+    const groupProperties = new Set();
+    groupsRows.forEach(row => {
+        const traits = JSON.parse(row.traits || '{}');
+        Object.keys(flattenObject(traits)).forEach(prop => groupProperties.add(prop));
+    });
+    if (groupsRows.length > 0) {
+        plan.push({ ruleType: 'group', ruleName: 'Group', properties: Array.from(groupProperties).sort() });
+    }
+
+    // Process Events (Pages and Tracks)
+    const eventsByTypeAndName = {};
+    eventsRows.forEach(row => {
+        const type = row.type === '0' ? 'page' : 'track';
+        let name = row.name;
+        if (type === 'page') {
+            try {
+                const props = JSON.parse(row.properties || '{}');
+                name = (props && typeof props.name === 'string' && props.name.trim()) ? props.name.trim() : '(Not Set)';
+            } catch { name = '(Not Set)'; }
+        }
+        
+        const key = `${type}:${name}`;
+        if (!eventsByTypeAndName[key]) {
+            eventsByTypeAndName[key] = { ruleType: type, ruleName: name, properties: new Set() };
+        }
+        
+        const properties = JSON.parse(row.properties || '{}');
+        Object.keys(flattenObject(properties)).forEach(prop => eventsByTypeAndName[key].properties.add(prop));
+    });
+
+    Object.values(eventsByTypeAndName).forEach(event => {
+        plan.push({ ...event, properties: Array.from(event.properties).sort() });
+    });
+
+    return plan.sort((a, b) => a.ruleName.localeCompare(b.ruleName));
+}
+
+
 // --- SQL Query Generation ---
 
 async function getTableSchema(table) {
@@ -61,7 +114,6 @@ async function getTableSchema(table) {
         return metadata.schema.fields || [];
     } catch (e) {
         if (e.code !== 404) throw e;
-        console.warn(`Table ${table.id} not found for schema generation.`);
         return [];
     }
 }
@@ -75,12 +127,8 @@ async function generateSqlQueries(tableNames) {
     const viewQueries = [];
     const mergeQueries = [];
 
-    const viewHeader = `-- =====================================================================================
--- Non-Destructive VIEW Queries (Recommended)
--- =====================================================================================`;
-    const mergeHeader = `-- =====================================================================================
--- Destructive MERGE (Upsert) Queries
--- =====================================================================================`;
+    const viewHeader = `-- Non-Destructive VIEW Queries (Recommended)`;
+    const mergeHeader = `-- Destructive MERGE (Upsert) Queries`;
 
     for (const table of tableNames) {
         const migrationTable = bigquery.dataset(migrationDatasetId).table(table);
@@ -90,27 +138,15 @@ async function generateSqlQueries(tableNames) {
         if (allColumnNames.length === 0) continue;
 
         const columns = allColumnNames.map(c => `  ${c}`).join(',\n');
-
-        const viewSql = `-- For table: ${table}\n` +
-            `-- Note: This query assumes your live table has the same columns. \n-- You may need to add CAST(NULL AS TYPE) for columns that only exist in the migrated data.\n` +
-            `CREATE OR REPLACE VIEW \`${projectId}.${viewsDatasetId}.${table}\` AS\n` +
-            `SELECT\n${columns}\nFROM \`${projectId}.${liveDatasetId}.${table}\`\n` +
-            `UNION ALL\n` +
-            `SELECT\n${columns}\nFROM \`${projectId}.${migrationDatasetId}.${table}\`;`;
+        const viewSql = `CREATE OR REPLACE VIEW \`${projectId}.${viewsDatasetId}.${table}\` AS\nSELECT\n${columns}\nFROM \`${projectId}.${liveDatasetId}.${table}\`\nUNION ALL\nSELECT\n${columns}\nFROM \`${projectId}.${migrationDatasetId}.${table}\`;`;
         viewQueries.push({ table, query: viewSql });
 
-        const mergeSql = `-- For table: ${table}\n` +
-            `MERGE \`${projectId}.${liveDatasetId}.${table}\` T\n` +
-            `USING \`${projectId}.${migrationDatasetId}.${table}\` S\n` +
-            `ON T.id = S.id\n` +
-            `WHEN NOT MATCHED BY TARGET THEN\n` +
-            `  INSERT (${allColumnNames.join(', ')})\n` +
-            `  VALUES (${allColumnNames.join(', ')});`;
+        const mergeSql = `MERGE \`${projectId}.${liveDatasetId}.${table}\` T\nUSING \`${projectId}.${migrationDatasetId}.${table}\` S\nON T.id = S.id\nWHEN NOT MATCHED BY TARGET THEN\n  INSERT (${allColumnNames.join(', ')})\n  VALUES (${allColumnNames.join(', ')});`;
         mergeQueries.push({ table, query: mergeSql });
     }
 
     return {
-        message: `SQL Generation successful! Here are the queries to merge your data.`,
+        message: `Upload successful! Here are the SQL queries to merge your migrated data.`,
         viewHeader,
         mergeHeader,
         viewQueries,
@@ -129,34 +165,19 @@ async function manageSchemaAndInsert(tableId, baseSchema, rows, dynamicPropertyK
     const flattenedRows = rows.map(row => {
         const dynamicData = JSON.parse(row[dynamicPropertyKey] || '{}');
         const context = JSON.parse(row.context || '{}');
-        
         const finalRow = {
-            id: row.message_id,
-            anonymous_id: row.anonymous_id,
-            user_id: row.user_id,
-            received_at: row.received_at,
-            sent_at: row.sent_at,
-            timestamp: row.timestamp,
-            original_timestamp: row.original_timestamp,
-            channel: row.channel,
-            version: row.version,
+            id: row.message_id, anonymous_id: row.anonymous_id, user_id: row.user_id,
+            received_at: row.received_at, sent_at: row.sent_at, timestamp: row.timestamp,
+            original_timestamp: row.original_timestamp, channel: row.channel, version: row.version,
             group_id: row.group_id,
         };
-        
-        if (tableId === 'users') {
-            finalRow.id = row.user_id;
-            // **THE FIX**: Remove the user_id field as it's not part of the users table schema.
-            delete finalRow.user_id;
-        }
-
+        if (tableId === 'users') finalRow.id = row.user_id;
         if (baseSchema === TRACKS_SCHEMA) {
             finalRow.event = sanitizeTableName(row.name);
             finalRow.event_text = row.name;
         }
-
         Object.assign(finalRow, flattenObject(context, 'context'));
         Object.assign(finalRow, flattenObject(dynamicData));
-
         Object.keys(finalRow).forEach(key => finalRow[key] === undefined && delete finalRow[key]);
         return finalRow;
     });
@@ -223,47 +244,6 @@ function parseCsvToRows(file) {
     });
 }
 
-async function processFile(file, type, processedTablesSet, isDryRun) {
-    const rows = await parseCsvToRows(file);
-    switch (type) {
-        case 'identifies':
-            processedTablesSet.add('identifies').add('users');
-            if (!isDryRun) {
-                await manageSchemaAndInsert('identifies', IDENTIFIES_SCHEMA, rows, 'traits', processedTablesSet);
-                await manageSchemaAndInsert('users', USERS_SCHEMA, rows, 'traits', processedTablesSet);
-            }
-            break;
-        case 'groups':
-            processedTablesSet.add('_groups');
-            if (!isDryRun) {
-                await manageSchemaAndInsert('_groups', GROUPS_SCHEMA, rows, 'traits', processedTablesSet);
-            }
-            break;
-        case 'events':
-            const pageRows = rows.filter(row => row.type === '0');
-            const trackRows = rows.filter(row => row.type === '2');
-            if (pageRows.length > 0) processedTablesSet.add('pages');
-            if (trackRows.length > 0) processedTablesSet.add('tracks');
-            
-            const tracksByName = trackRows.reduce((acc, event) => {
-                const tableName = sanitizeTableName(event.name);
-                processedTablesSet.add(tableName);
-                if (!acc[tableName]) acc[tableName] = [];
-                acc[tableName].push(event);
-                return acc;
-            }, {});
-
-            if (!isDryRun) {
-                await manageSchemaAndInsert('pages', PAGES_SCHEMA, pageRows, 'properties', processedTablesSet);
-                await manageSchemaAndInsert('tracks', TRACKS_SCHEMA, trackRows, 'properties', processedTablesSet);
-                for (const [tableId, tableRows] of Object.entries(tracksByName)) {
-                    await manageSchemaAndInsert(tableId, TRACKS_SCHEMA, tableRows, 'properties', processedTablesSet);
-                }
-            }
-            break;
-    }
-}
-
 // --- Express Routes ---
 app.post('/upload', upload.fields([
     { name: 'identifies', maxCount: 1 }, { name: 'groups', maxCount: 1 }, { name: 'events', maxCount: 1 }, { name: 'dryRun' }
@@ -276,22 +256,50 @@ app.post('/upload', upload.fields([
     try {
         console.log(`\n--- Starting New Upload Process (Dry Run: ${isDryRun}) ---`);
 
-        if (req.files.identifies) {
-            console.log("\n[Main] Processing identifies file...");
-            await processFile(req.files.identifies[0], 'identifies', processedTables, isDryRun);
+        const identifiesRows = req.files.identifies ? await parseCsvToRows(req.files.identifies[0]) : [];
+        const groupsRows = req.files.groups ? await parseCsvToRows(req.files.groups[0]) : [];
+        const eventsRows = req.files.events ? await parseCsvToRows(req.files.events[0]) : [];
+
+        if (identifiesRows.length > 0) {
+            processedTables.add('identifies').add('users');
+            if (!isDryRun) {
+                await manageSchemaAndInsert('identifies', IDENTIFIES_SCHEMA, identifiesRows, 'traits', processedTables);
+                await manageSchemaAndInsert('users', USERS_SCHEMA, identifiesRows, 'traits', processedTables);
+            }
         }
-        if (req.files.groups) {
-            console.log("\n[Main] Processing groups file...");
-            await processFile(req.files.groups[0], 'groups', processedTables, isDryRun);
+        if (groupsRows.length > 0) {
+            processedTables.add('_groups');
+            if (!isDryRun) {
+                await manageSchemaAndInsert('_groups', GROUPS_SCHEMA, groupsRows, 'traits', processedTables);
+            }
         }
-        if (req.files.events) {
-            console.log("\n[Main] Processing events file...");
-            await processFile(req.files.events[0], 'events', processedTables, isDryRun);
+        if (eventsRows.length > 0) {
+            const pageRows = eventsRows.filter(row => row.type === '0');
+            const trackRows = eventsRows.filter(row => row.type === '2');
+            if (pageRows.length > 0) processedTables.add('pages');
+            if (trackRows.length > 0) processedTables.add('tracks');
+            trackRows.forEach(event => processedTables.add(sanitizeTableName(event.name)));
+
+            if (!isDryRun) {
+                await manageSchemaAndInsert('pages', PAGES_SCHEMA, pageRows, 'properties', processedTables);
+                await manageSchemaAndInsert('tracks', TRACKS_SCHEMA, trackRows, 'properties', processedTables);
+                const tracksByName = trackRows.reduce((acc, event) => {
+                    const tableName = sanitizeTableName(event.name);
+                    if (!acc[tableName]) acc[tableName] = [];
+                    acc[tableName].push(event);
+                    return acc;
+                }, {});
+                for (const [tableId, tableRows] of Object.entries(tracksByName)) {
+                    await manageSchemaAndInsert(tableId, TRACKS_SCHEMA, tableRows, 'properties', processedTables);
+                }
+            }
         }
 
         console.log("\n--- Process Completed Successfully ---\n");
         const sqlQueries = await generateSqlQueries(processedTables);
-        res.status(200).json(sqlQueries);
+        const trackingPlan = generateTrackingPlan(identifiesRows, groupsRows, eventsRows);
+        
+        res.status(200).json({ ...sqlQueries, trackingPlan });
     } catch (error) {
         console.error("\n--- An error occurred during the upload process ---");
         console.error("Final error caught in handler:", error.message);
